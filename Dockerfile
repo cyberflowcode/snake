@@ -6,7 +6,7 @@
 FROM node:20-alpine AS frontend
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install --no-audit --no-fund
 COPY resources resources/
 COPY public public/
 COPY vite.config.js ./
