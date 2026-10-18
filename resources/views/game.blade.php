@@ -8,7 +8,7 @@
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
     <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;600;700;800;900&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <link rel="stylesheet" href="{{ asset('css/game.css') }}">
+    <link rel="stylesheet" href="/css/game.css">
 </head>
 <body>
     <div id="game-container">
@@ -191,17 +191,17 @@
 
     <!-- Reverb / Pusher & Game API Configuration -->
     <script>
-        window.APP_BASE_URL = "{{ url('/') }}";
-        window.API_BASE_URL = "{{ url('/api') }}";
+        window.APP_BASE_URL = window.location.origin;
+        window.API_BASE_URL = window.location.origin + '/api';
         window.CSRF_TOKEN = "{{ csrf_token() }}";
         window.REVERB_APP_KEY = "{{ env('REVERB_APP_KEY', 'snake-app-key') }}";
-        window.REVERB_HOST = "{{ env('REVERB_HOST', request()->getHost()) }}";
-        window.REVERB_PORT = {{ env('REVERB_PORT', 8080) }};
-        window.REVERB_SCHEME = "{{ env('REVERB_SCHEME', request()->isSecure() ? 'https' : 'http') }}";
+        window.REVERB_HOST = "{{ env('REVERB_HOST', '') }}" || window.location.hostname;
+        window.REVERB_PORT = {{ env('REVERB_PORT', 0) }} || (window.location.protocol === 'https:' ? 443 : 8080);
+        window.REVERB_SCHEME = "{{ env('REVERB_SCHEME', '') }}" || (window.location.protocol === 'https:' ? 'https' : 'http');
     </script>
     <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/laravel-echo@1.16.1/dist/echo.iife.js"></script>
-    <script src="{{ asset('js/engine.js') }}?v={{ file_exists(public_path('js/engine.js')) ? filemtime(public_path('js/engine.js')) : time() }}"></script>
-    <script src="{{ asset('js/game.js') }}?v={{ file_exists(public_path('js/game.js')) ? filemtime(public_path('js/game.js')) : time() }}"></script>
+    <script src="/js/engine.js?v={{ file_exists(public_path('js/engine.js')) ? filemtime(public_path('js/engine.js')) : time() }}"></script>
+    <script src="/js/game.js?v={{ file_exists(public_path('js/game.js')) ? filemtime(public_path('js/game.js')) : time() }}"></script>
 </body>
 </html>
