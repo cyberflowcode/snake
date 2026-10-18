@@ -841,7 +841,6 @@
         }
 
         // Global rooms: hide Rematch (no point), show Play Again → matchmaking
-        const isGlobalRoom = currentRoom?.is_public || (currentRoom?.max_players >= 20);
         if (el.btnRematch) el.btnRematch.style.display = isGlobalRoom ? 'none' : 'inline-flex';
 
         // Inject Play Again button for global room if not already there
