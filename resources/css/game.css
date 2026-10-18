@@ -270,6 +270,59 @@ html, body {
     transform: translate(-50%, -50%) scale(1.15);
 }
 
+/* Respawn Banner for Global Arena (Floating & Non-blocking) */
+.respawn-banner {
+    position: absolute;
+    top: 22%;
+    left: 50%;
+    transform: translate(-50%, -50%);
+    z-index: 60;
+    pointer-events: none;
+    animation: respawnBounce 0.4s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+@keyframes respawnBounce {
+    from { opacity: 0; transform: translate(-50%, -65%) scale(0.9); }
+    to { opacity: 1; transform: translate(-50%, -50%) scale(1); }
+}
+
+.respawn-content {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    padding: 14px 28px;
+    border-radius: 50px;
+    background: rgba(14, 18, 28, 0.94);
+    border: 2px solid rgba(255, 23, 68, 0.6);
+    box-shadow: 0 10px 35px rgba(0, 0, 0, 0.8), 0 0 30px rgba(255, 23, 68, 0.35);
+}
+
+.respawn-icon {
+    font-size: 28px;
+    animation: pulse 1s infinite;
+}
+
+.respawn-text {
+    display: flex;
+    flex-direction: column;
+    text-align: left;
+}
+
+.respawn-title {
+    font-size: 13px;
+    font-weight: 900;
+    letter-spacing: 2px;
+    color: #ff1744;
+    text-transform: uppercase;
+}
+
+.respawn-countdown {
+    font-size: 20px;
+    font-weight: 800;
+    color: #ffffff;
+    letter-spacing: 0.5px;
+}
+
 /* Modals & Dialogs (Lobby, Join, Game Over) */
 .modal-overlay {
     position: absolute;

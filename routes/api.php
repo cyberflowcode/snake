@@ -40,6 +40,7 @@ Route::prefix('rooms')->group(function () {
     Route::post('/{code}/direction', [GameRoomController::class, 'direction']);
     Route::get('/{code}/snapshot',   [GameRoomController::class, 'snapshot']);
     Route::post('/{code}/rematch',   [GameRoomController::class, 'rematch']);
+    Route::post('/{code}/respawn',   [GameRoomController::class, 'respawn']);
     Route::post('/{code}/leave',     [GameRoomController::class, 'leave']);
 });
 

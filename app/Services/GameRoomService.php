@@ -664,4 +664,37 @@ class GameRoomService
 
         return $scoreboard;
     }
+
+    /**
+     * Respawn an eliminated player with a fresh snake at a random position.
+     */
+    public function respawnPlayer(Room $room, Player $player): array
+    {
+        return DB::transaction(function () use ($room, $player) {
+            $player->update([
+                'is_alive' => true,
+                'score'    => 0,
+                'length'   => SnakeSimulationService::MIN_STARTING_LENGTH,
+            ]);
+
+            $state = $room->game_state;
+            if ($state) {
+                $newSnake = $this->simulation->createSnakeForPlayer(
+                    $state['width'] ?? 3200,
+                    $state['height'] ?? 3200,
+                    $player->toArray(),
+                    $state['snakes'] ?? []
+                );
+                $state['snakes'][$player->id] = $newSnake;
+                $room->game_state = $state;
+                $room->save();
+
+                try {
+                    broadcast(new \App\Events\GameStateUpdated($room->code, $state));
+                } catch (\Throwable $e) {}
+            }
+
+            return $room->game_state ?? [];
+        });
+    }
 }

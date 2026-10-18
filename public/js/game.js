@@ -490,6 +490,7 @@
         el.gameOverModal.style.display = 'none';
         el.countdown.style.display     = 'none';
         el.countdown.classList.remove('active');
+        _endAutoRespawn();
 
         _btnState(el.btnPlayNow, false, '🎮 PLAY NOW');
         _btnState(el.btnCreate,  false, '⚡ Create Private Room (Invite Friends)');
@@ -728,10 +729,64 @@
             el.countdown.style.display = 'none';
         }
 
-        // Game over
-        if (state.status === 'finished' && el.gameOverModal.style.display !== 'flex') {
+        // Game over (private rooms only)
+        const isGlobalState = Boolean(currentRoom?.is_public || (currentRoom?.max_players >= 20));
+        if (!isGlobalState && state.status === 'finished' && el.gameOverModal.style.display !== 'flex') {
             _onGameOver({ winner_id: state.winner_id, scoreboard: _buildScoreboard(state) });
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // Global Arena Auto-Revive (3 seconds countdown)
+    // -----------------------------------------------------------------------
+    let _respawnInProgress = false;
+    let _respawnTimerInterval = null;
+
+    function _startAutoRespawn() {
+        if (_respawnInProgress) return;
+        _respawnInProgress = true;
+        let secondsLeft = 3;
+
+        const banner = document.getElementById('respawn-banner');
+        const timerText = document.getElementById('respawn-timer');
+        if (banner) banner.style.display = 'block';
+        if (timerText) timerText.innerText = `Reviving in ${secondsLeft}s...`;
+
+        clearInterval(_respawnTimerInterval);
+        _respawnTimerInterval = setInterval(() => {
+            secondsLeft--;
+            if (secondsLeft > 0) {
+                if (timerText) timerText.innerText = `Reviving in ${secondsLeft}s...`;
+            } else {
+                if (timerText) timerText.innerText = `Spawning!`;
+                clearInterval(_respawnTimerInterval);
+                _respawnTimerInterval = null;
+                _doRespawn();
+            }
+        }, 1000);
+    }
+
+    async function _doRespawn() {
+        if (!currentRoom) return;
+        try {
+            const res = await _api(`/api/rooms/${currentRoom.code}/respawn`, 'POST');
+            if (res?.state) {
+                _onState(res.state);
+            }
+        } catch (_) {}
+        localScore = 0;
+        localLength = 14;
+        _endAutoRespawn();
+    }
+
+    function _endAutoRespawn() {
+        _respawnInProgress = false;
+        clearInterval(_respawnTimerInterval);
+        _respawnTimerInterval = null;
+        const banner = document.getElementById('respawn-banner');
+        if (banner) banner.style.display = 'none';
+        localScore = 0;
+        localLength = 14;
     }
 
     // -----------------------------------------------------------------------
@@ -762,10 +817,19 @@
             const rank  = me.rank || _rankOf(myPlayer.id, state.snakes);
             if (el.hudRank) el.hudRank.innerText = `${rank} of ${total}`;
 
-            // If my snake crashed in the global arena, prompt game-over for me so I can Play Again
             const isGlobal = Boolean(currentRoom?.is_public || (currentRoom?.max_players >= 20));
-            if (isGlobal && !me.is_alive && el.gameOverModal.style.display !== 'flex' && el.welcomeModal.style.display !== 'flex') {
-                _onGameOver({ winner_id: null, scoreboard: _buildScoreboard(state) });
+            if (isGlobal) {
+                // In global arena: auto-revive in 3 seconds! Never show game-over modal!
+                if (!me.is_alive && !_respawnInProgress) {
+                    _startAutoRespawn();
+                } else if (me.is_alive && _respawnInProgress) {
+                    _endAutoRespawn();
+                }
+            } else {
+                // In private rooms: show standard match-over screen
+                if (!me.is_alive && el.gameOverModal.style.display !== 'flex' && el.welcomeModal.style.display !== 'flex') {
+                    _onGameOver({ winner_id: null, scoreboard: _buildScoreboard(state) });
+                }
             }
         }
 
@@ -802,22 +866,20 @@
     // Game over screen
     // -----------------------------------------------------------------------
     function _onGameOver(results) {
+        const isGlobalRoom = Boolean(currentRoom?.is_public || (currentRoom?.max_players >= 20));
+        if (isGlobalRoom) return; // NEVER show game-over modal in global room!
+
         el.gameOverModal.style.display = 'flex';
         const state   = SnakeEngine.getAuthState();
         const cmap    = SnakeEngine.COLOR_MAP;
         const banner  = document.getElementById('winner-banner');
         const board   = document.getElementById('final-scoreboard');
-        const isGlobalRoom = Boolean(currentRoom?.is_public || (currentRoom?.max_players >= 20));
 
         const winner = results.winner_id && state?.snakes?.[results.winner_id];
         if (banner) {
-            if (isGlobalRoom) {
-                banner.innerHTML = '💥 Snake Eliminated!';
-            } else {
-                banner.innerHTML = winner
-                    ? `👑 Winner: <span style="color:${cmap[winner.color]?.main || '#ffd600'};font-weight:900">${_esc(winner.nickname)}</span>`
-                    : '💥 Match Concluded!';
-            }
+            banner.innerHTML = winner
+                ? `👑 Winner: <span style="color:${cmap[winner.color]?.main || '#ffd600'};font-weight:900">${_esc(winner.nickname)}</span>`
+                : '💥 Match Concluded!';
         }
 
         if (board) {

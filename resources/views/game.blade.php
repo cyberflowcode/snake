@@ -54,6 +54,17 @@
         <!-- Countdown Overlay (3, 2, 1, GO!) -->
         <div id="countdown-overlay">3</div>
 
+        <!-- Global Arena Auto-Respawn Banner -->
+        <div id="respawn-banner" class="respawn-banner" style="display: none;">
+            <div class="respawn-content glass-panel">
+                <div class="respawn-icon">💥</div>
+                <div class="respawn-text">
+                    <span class="respawn-title">SNAKE ELIMINATED!</span>
+                    <span class="respawn-countdown" id="respawn-timer">Reviving in 3s...</span>
+                </div>
+            </div>
+        </div>
+
         <!-- Mobile Touch Controls -->
         <div class="mobile-controls">
             <div class="joystick-zone" id="joystick-zone">

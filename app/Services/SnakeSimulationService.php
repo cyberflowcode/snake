@@ -177,6 +177,23 @@ class SnakeSimulationService
         $height = $state['height'];
         $snakes = &$state['snakes'];
 
+        // Auto-revive eliminated snakes in global public rooms after 3 seconds (30 ticks)
+        if (!empty($state['is_public'])) {
+            foreach ($snakes as $id => &$snake) {
+                if (!$snake['is_alive'] && empty($snake['left_voluntarily']) && isset($snake['respawn_tick'])) {
+                    if ($state['tick'] >= $snake['respawn_tick']) {
+                        $freshSnake = $this->createSnakeForPlayer($width, $height, [
+                            'id'       => $id,
+                            'nickname' => $snake['nickname'],
+                            'color'    => $snake['color'],
+                        ], $snakes);
+                        $snake = $freshSnake;
+                    }
+                }
+            }
+            unset($snake);
+        }
+
         // 1. Process inputs and update angles
         foreach ($snakes as $id => &$snake) {
             if (!$snake['is_alive']) {
@@ -355,6 +372,10 @@ class SnakeSimulationService
             $snake['is_alive'] = false;
             $snake['eliminated_at'] = $state['tick'];
             $snake['rank'] = $aliveCountBefore;
+            if (!empty($state['is_public'])) {
+                // Auto-respawn after 3 seconds (30 ticks at 10 ticks/s)
+                $snake['respawn_tick'] = $state['tick'] + 30;
+            }
             $state['eliminations'][] = [
                 'player_id' => $id,
                 'nickname'  => $snake['nickname'],

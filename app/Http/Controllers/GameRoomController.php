@@ -244,6 +244,31 @@ class GameRoomController extends Controller
     }
 
     /**
+     * Respawn eliminated player in room.
+     */
+    public function respawn(Request $request, string $code): JsonResponse
+    {
+        $room = Room::where('code', strtoupper(trim($code)))->first();
+        if (!$room) {
+            return response()->json(['error' => 'Room not found'], 404);
+        }
+
+        $token = $request->header('X-Guest-Token') ?? $request->input('guest_token');
+        $player = $this->roomService->authenticateGuest($code, $token);
+
+        if (!$player) {
+            return response()->json(['error' => 'Unauthorized'], 401);
+        }
+
+        $state = $this->roomService->respawnPlayer($room, $player);
+
+        return response()->json([
+            'success' => true,
+            'state'   => $state,
+        ]);
+    }
+
+    /**
      * Reconnect guest with stored credential.
      */
     public function reconnect(Request $request, string $code): JsonResponse
