@@ -18,6 +18,9 @@ if [ -n "$DB_HOST" ]; then
     done
 fi
 
+echo "Discovering packages..."
+php artisan package:discover --ansi || true
+
 if [ "$SERVICE_MODE" = "web" ]; then
     echo "Running migrations..."
     php artisan migrate --force --no-interaction || true

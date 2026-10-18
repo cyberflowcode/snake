@@ -16,7 +16,7 @@ RUN npm run build 2>/dev/null || echo "No Vite build — using pre-built public/
 FROM composer:2.7 AS composer-stage
 WORKDIR /app
 COPY composer*.json ./
-RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --ignore-platform-reqs
+RUN composer install --no-dev --no-interaction --prefer-dist --optimize-autoloader --ignore-platform-reqs --no-scripts
 
 # Stage 3: Production Runtime
 FROM php:8.3-cli-alpine AS runtime
