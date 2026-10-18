@@ -26,6 +26,7 @@
         purple: { main: '#d500f9', light: '#ff64ff', dark: '#9e00c5', text: '#ea80fc' },
         green:  { main: '#00e676', light: '#66ffa6', dark: '#00b348', text: '#69f0ae' },
         blue:   { main: '#2979ff', light: '#75a7ff', dark: '#004ecb', text: '#82b1ff' },
+        rainbow: { main: '#ff007f', light: '#ffffff', dark: '#d500f9', text: '#ff007f', isRainbow: true },
     };
 
     const RANK_COLORS = ['#d500f9','#ff1744','#ff9100','#00e5ff','#00e676','#ffd600','#2979ff','#f50057','#00b0ff','#76ff03'];
@@ -46,10 +47,12 @@
     let canvas, ctx, minimapCanvas, minimapCtx;
 
     // Sprite caches
-    const segSprites  = {};
-    const foodSprites = {};
-    let hexPattern    = null;
-    let hexPatCanvas  = null;
+    const segSprites        = {};
+    const rainbowSegSprites = [];
+    const foodSprites       = {};
+    const localEatenMap     = new Map();
+    let hexPattern          = null;
+    let hexPatCanvas        = null;
 
     // Frame timing
     let lastTs = performance.now();
@@ -74,6 +77,18 @@
     // -----------------------------------------------------------------------
     function setAuthState(state) {
         if (!state || Array.isArray(state) || !state.status) return;
+
+        // Prune optimistic eaten food timestamps older than 1.5 seconds
+        const now = Date.now();
+        for (const [id, t] of localEatenMap.entries()) {
+            if (now - t > 1500) localEatenMap.delete(id);
+        }
+
+        // Filter out foods that the local player already ate optimistically so they do not flash back before server roundtrip
+        if (state.foods && Array.isArray(state.foods) && localEatenMap.size > 0) {
+            state.foods = state.foods.filter(f => !localEatenMap.has(f.id));
+        }
+
         authState = state;
         // When server sends a new state, reconcile local snakes
         _reconcile();
@@ -278,11 +293,13 @@
         if (isLive && myPlayerId !== null && localSnakes[myPlayerId] && authState.foods) {
             const me    = localSnakes[myPlayerId];
             const foods = authState.foods;
+            const now   = Date.now();
             for (let i = foods.length - 1; i >= 0; i--) {
                 const f  = foods[i];
                 const dx = me.x - f.x;
                 const dy = me.y - f.y;
                 if (dx * dx + dy * dy < EAT_R_SQ) {
+                    localEatenMap.set(f.id, now);
                     _pendingEats.push(foods.splice(i, 1)[0]);
                 }
             }
@@ -412,20 +429,49 @@
     }
 
     function _drawSnake(ls, auth) {
+        const isRainbow = (auth.color === 'rainbow');
         const key    = auth.color || 'cyan';
         const spr    = segSprites[key] || segSprites.cyan;
-        const half   = 18;
+        const half   = 19;
         const body   = ls.body;
         if (!body || body.length === 0) return;
+
+        // Base rainbow hue cycles smoothly over time
+        const baseHue = (performance.now() * 0.08);
 
         // Body (tail→neck)
         for (let i = body.length - 1; i >= 0; i--) {
             const seg = body[i];
-            if (seg) ctx.drawImage(spr, seg.x - half, seg.y - half);
+            if (!seg) continue;
+
+            if (isRainbow && rainbowSegSprites.length > 0) {
+                // Cycling rainbow gradient through red, orange, yellow, green, cyan, blue, purple, pink
+                const segHue = Math.floor(baseHue + (body.length - 1 - i) * 7.5);
+                const bucket = Math.floor(((segHue % 360) + 360) % 360 / 10);
+                const rSpr = rainbowSegSprites[bucket] || rainbowSegSprites[0];
+                ctx.drawImage(rSpr, seg.x - half, seg.y - half);
+            } else {
+                ctx.drawImage(spr, seg.x - 18, seg.y - 18);
+            }
+        }
+
+        // Head
+        const hx = ls.x, hy = ls.y, ha = ls.angle;
+
+        // Smooth neon aura around rainbow head
+        if (isRainbow) {
+            ctx.save();
+            ctx.shadowBlur = 18;
+            const headHue = Math.floor(baseHue + body.length * 7.5) % 360;
+            ctx.shadowColor = `hsl(${headHue}, 100%, 65%)`;
+            ctx.beginPath();
+            ctx.arc(hx, hy, HEAD_R + 1, 0, Math.PI * 2);
+            ctx.fillStyle = 'rgba(255,255,255,0.01)';
+            ctx.fill();
+            ctx.restore();
         }
 
         // Eyes
-        const hx = ls.x, hy = ls.y, ha = ls.angle;
         const ED = 8.5, EF = 5, ER = 5.5, PR = 3;
         const lx = hx + Math.cos(ha) * EF + Math.cos(ha - Math.PI / 2) * ED;
         const ly = hy + Math.sin(ha) * EF + Math.sin(ha - Math.PI / 2) * ED;
@@ -446,6 +492,8 @@
         ctx.font = '700 13px Outfit,sans-serif';
         ctx.textAlign = 'center';
         ctx.fillStyle = '#fff';
+        ctx.shadowColor = 'rgba(0,0,0,0.85)';
+        ctx.shadowBlur = 4;
         ctx.fillText(auth.nickname || '', hx, hy - 22);
     }
 
@@ -501,6 +549,34 @@
             cx.fillStyle = g; cx.fill();
             cx.strokeStyle = 'rgba(0,0,0,0.35)'; cx.lineWidth = 1.2; cx.stroke();
             segSprites[key] = cv;
+        }
+
+        // Pre-render 36 hue steps of radiant neon rainbow body segments
+        for (let step = 0; step < 36; step++) {
+            const hue = step * 10;
+            const sz = 38, r = 14, c = sz / 2;
+            const cv = Object.assign(document.createElement('canvas'), { width: sz, height: sz });
+            const cx = cv.getContext('2d');
+
+            // Radiant neon halo
+            const glow = cx.createRadialGradient(c, c, r * 0.35, c, c, r + 4);
+            glow.addColorStop(0, `hsla(${hue}, 100%, 65%, 0.85)`);
+            glow.addColorStop(0.6, `hsla(${hue}, 100%, 55%, 0.35)`);
+            glow.addColorStop(1, 'rgba(0,0,0,0)');
+            cx.fillStyle = glow;
+            cx.beginPath(); cx.arc(c, c, r + 4, 0, Math.PI * 2); cx.fill();
+
+            // Vibrant gradient core
+            const g = cx.createRadialGradient(c - r * 0.35, c - r * 0.35, r * 0.1, c, c, r);
+            g.addColorStop(0, '#ffffff'); // bright shine
+            g.addColorStop(0.35, `hsl(${hue}, 100%, 75%)`);
+            g.addColorStop(0.75, `hsl(${hue}, 100%, 50%)`);
+            g.addColorStop(1, `hsl(${hue}, 100%, 35%)`);
+            cx.beginPath(); cx.arc(c, c, r, 0, Math.PI * 2);
+            cx.fillStyle = g; cx.fill();
+            cx.strokeStyle = 'rgba(255,255,255,0.55)'; cx.lineWidth = 1.0; cx.stroke();
+
+            rainbowSegSprites[step] = cv;
         }
 
         FOOD_COLORS.forEach(color => {

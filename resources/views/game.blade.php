@@ -92,12 +92,13 @@
                 <div class="input-group">
                     <label class="input-label">Select Snake Color</label>
                     <div class="color-picker">
-                        <div class="color-option selected" data-color="cyan" style="background: #00e5ff;"></div>
-                        <div class="color-option" data-color="yellow" style="background: #ffd600;"></div>
-                        <div class="color-option" data-color="red" style="background: #ff1744;"></div>
-                        <div class="color-option" data-color="purple" style="background: #d500f9;"></div>
-                        <div class="color-option" data-color="green" style="background: #00e676;"></div>
-                        <div class="color-option" data-color="blue" style="background: #2979ff;"></div>
+                        <div class="color-option selected" data-color="cyan" style="background: #00e5ff;" title="Neon Cyan"></div>
+                        <div class="color-option" data-color="yellow" style="background: #ffd600;" title="Electric Yellow"></div>
+                        <div class="color-option" data-color="red" style="background: #ff1744;" title="Crimson Red"></div>
+                        <div class="color-option" data-color="purple" style="background: #d500f9;" title="Cyber Purple"></div>
+                        <div class="color-option" data-color="green" style="background: #00e676;" title="Plasma Green"></div>
+                        <div class="color-option" data-color="blue" style="background: #2979ff;" title="Cobalt Blue"></div>
+                        <div class="color-option color-option-rainbow" data-color="rainbow" title="Rainbow Glow"></div>
                     </div>
                 </div>
 

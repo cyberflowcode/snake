@@ -109,11 +109,11 @@ class GameRoomService
                 }
             }
 
-            // Pick a distinct color
+            // Pick a distinct color or honor requested color
             $existingColors   = $globalRoom->players()->pluck('color')->toArray();
             $availableColors  = array_keys(SnakeSimulationService::PALETTE);
             $diff             = array_diff($availableColors, $existingColors);
-            $selectedColor    = ($color && !in_array($color, $existingColors)) ? $color : (reset($diff) ?: $availableColors[array_rand($availableColors)]);
+            $selectedColor    = ($color && in_array($color, $availableColors)) ? $color : (reset($diff) ?: 'cyan');
 
             $player = Player::create([
                 'room_id'      => $globalRoom->id,
@@ -206,16 +206,13 @@ class GameRoomService
                 $room->save();
             }
 
-            // Assign distinct color if duplicate or not provided
+            // Assign distinct color if duplicate or not provided, allowing chosen special colors
             $existingColors = $room->players()->pluck('color')->toArray();
             $availableColors = array_keys(SnakeSimulationService::PALETTE);
             $diff = array_diff($availableColors, $existingColors);
-            $fallbackColor = !empty($diff) ? reset($diff) : $availableColors[array_rand($availableColors)];
+            $fallbackColor = !empty($diff) ? reset($diff) : 'cyan';
 
-            $selectedColor = $color ?: $fallbackColor;
-            if (in_array($selectedColor, $existingColors)) {
-                $selectedColor = $fallbackColor;
-            }
+            $selectedColor = ($color && in_array($color, $availableColors)) ? $color : $fallbackColor;
 
             $creds = Player::generateCredentials();
             $player = Player::create([
@@ -328,19 +325,22 @@ class GameRoomService
      */
     public function processTick(Room $room, array $bufferedInputs = []): array
     {
-        $state = $room->game_state;
+        $stateCacheKey = "room_active_state_{$room->id}";
+        $state = \Illuminate\Support\Facades\Cache::get($stateCacheKey) ?: $room->game_state;
+
         if (!$state || ($room->status !== 'countdown' && $room->status !== 'in_progress')) {
             return [];
         }
 
         $updatedState = $this->simulation->tick($state, $bufferedInputs);
+        \Illuminate\Support\Facades\Cache::put($stateCacheKey, $updatedState, 300);
 
         $statusChanged = ($updatedState['status'] !== $room->status);
         $room->status = $updatedState['status'];
-        $room->game_state = $updatedState;
 
-        // If match finished this tick, persist results
+        // If match finished this tick, persist results immediately
         if ($updatedState['status'] === 'finished' && $statusChanged) {
+            $room->game_state = $updatedState;
             $room->finished_at = now();
             $room->winner_id = $updatedState['winner_id'];
             $room->save();
@@ -353,7 +353,9 @@ class GameRoomService
                     'scoreboard' => $this->buildScoreboard($room, $updatedState),
                 ]));
             } catch (\Throwable $e) {}
-        } else {
+        } elseif (($updatedState['tick'] ?? 0) % 30 === 0) {
+            // Periodic sync to MySQL every 3 seconds to avoid unnecessary DB load while persisting state
+            $room->game_state = $updatedState;
             $room->save();
         }
 
@@ -371,8 +373,11 @@ class GameRoomService
      */
     public function tickRoomIfNeeded(Room $room): array
     {
-        if (!$room->game_state || ($room->status !== 'countdown' && $room->status !== 'in_progress')) {
-            return $room->game_state ?? [];
+        $stateCacheKey = "room_active_state_{$room->id}";
+        $state = \Illuminate\Support\Facades\Cache::get($stateCacheKey) ?: $room->game_state;
+
+        if (!$state || ($room->status !== 'countdown' && $room->status !== 'in_progress')) {
+            return $state ?? [];
         }
 
         $tickRate = $room->tick_rate ?: 10;
@@ -390,57 +395,86 @@ class GameRoomService
         $ticksDue = (int)floor($elapsed / $tickInterval);
 
         if ($ticksDue <= 0) {
-            return $room->game_state;
+            return $state;
         }
 
-        $ticksToRun = min(15, $ticksDue);
+        // Concurrency protection: atomic lock ensures only ONE request ticks the simulation at any moment
+        $lock = \Illuminate\Support\Facades\Cache::lock("room_tick_lock_{$room->id}", 2);
 
-        // Advance the time accumulator by the exact number of ticks processed
-        // to prevent simulation time drift and jitter
-        $newTickTime = ($elapsed > 2.0)
-            ? $now
-            : ((float)$lastTickTime + ($ticksToRun * $tickInterval));
-        \Illuminate\Support\Facades\Cache::put($cacheKey, $newTickTime, 30);
-
-        $state = $room->game_state;
-        $inputs = $this->collectInputsForRoom($room);
-        $statusChanged = false;
-
-        for ($i = 0; $i < $ticksToRun; $i++) {
-            $state = $this->simulation->tick($state, $inputs);
-            if ($state['status'] !== $room->status) {
-                $statusChanged = true;
-                $room->status = $state['status'];
-            }
-            if ($state['status'] === 'finished') {
-                break;
-            }
-        }
-
-        $room->game_state = $state;
-
-        if ($state['status'] === 'finished' && $statusChanged) {
-            $room->finished_at = now();
-            $room->winner_id = $state['winner_id'];
-            $room->save();
-
-            $this->persistMatchResults($room, $state);
-
-            try {
-                broadcast(new GameOver($room->code, [
-                    'winner_id'  => $state['winner_id'],
-                    'scoreboard' => $this->buildScoreboard($room, $state),
-                ]));
-            } catch (\Throwable $e) {}
-        } else {
-            $room->save();
+        if (!$lock->get()) {
+            // Another request is actively ticking this room right now; return current authoritative cached state
+            return \Illuminate\Support\Facades\Cache::get($stateCacheKey) ?: $state;
         }
 
         try {
-            broadcast(new GameStateUpdated($room->code, $state));
-        } catch (\Throwable $e) {}
+            // Re-read fresh state from cache inside lock in case another request just ticked it
+            $freshState = \Illuminate\Support\Facades\Cache::get($stateCacheKey);
+            if ($freshState && is_array($freshState)) {
+                $state = $freshState;
+            }
 
-        return $state;
+            $freshLastTickTime = \Illuminate\Support\Facades\Cache::get($cacheKey);
+            if ($freshLastTickTime !== null) {
+                $now = microtime(true);
+                $elapsed = $now - (float)$freshLastTickTime;
+                $ticksDue = (int)floor($elapsed / $tickInterval);
+                if ($ticksDue <= 0) {
+                    return $state;
+                }
+            }
+
+            $ticksToRun = min(15, $ticksDue);
+            $newTickTime = ($elapsed > 2.0)
+                ? $now
+                : ((float)($freshLastTickTime ?? $lastTickTime) + ($ticksToRun * $tickInterval));
+            \Illuminate\Support\Facades\Cache::put($cacheKey, $newTickTime, 30);
+
+            $inputs = $this->collectInputsForRoom($room);
+            $statusChanged = false;
+
+            for ($i = 0; $i < $ticksToRun; $i++) {
+                $state = $this->simulation->tick($state, $inputs);
+                if ($state['status'] !== $room->status) {
+                    $statusChanged = true;
+                    $room->status = $state['status'];
+                }
+                if ($state['status'] === 'finished') {
+                    break;
+                }
+            }
+
+            // Immediately store authoritative live state in cache so all concurrent requests see it
+            \Illuminate\Support\Facades\Cache::put($stateCacheKey, $state, 300);
+
+            // Avoid unnecessary database queries on every single tick:
+            // Only write to MySQL when room status changes (finished) or periodically every 30 ticks (3s)
+            $shouldPersist = $statusChanged || ($state['status'] === 'finished') || (($state['tick'] ?? 0) % 30 === 0);
+
+            if ($shouldPersist) {
+                $room->game_state = $state;
+                if ($state['status'] === 'finished' && $statusChanged) {
+                    $room->finished_at = now();
+                    $room->winner_id = $state['winner_id'];
+                    $this->persistMatchResults($room, $state);
+
+                    try {
+                        broadcast(new GameOver($room->code, [
+                            'winner_id'  => $state['winner_id'],
+                            'scoreboard' => $this->buildScoreboard($room, $state),
+                        ]));
+                    } catch (\Throwable $e) {}
+                }
+                $room->save();
+            }
+
+            try {
+                broadcast(new GameStateUpdated($room->code, $state));
+            } catch (\Throwable $e) {}
+
+            return $state;
+        } finally {
+            $lock->release();
+        }
     }
 
     /**
@@ -677,7 +711,7 @@ class GameRoomService
                 'length'   => SnakeSimulationService::MIN_STARTING_LENGTH,
             ]);
 
-            $state = $room->game_state;
+            $state = \Illuminate\Support\Facades\Cache::get("room_active_state_{$room->id}") ?: $room->game_state;
             if ($state) {
                 $newSnake = $this->simulation->createSnakeForPlayer(
                     $state['width'] ?? 3200,
@@ -686,6 +720,7 @@ class GameRoomService
                     $state['snakes'] ?? []
                 );
                 $state['snakes'][$player->id] = $newSnake;
+                \Illuminate\Support\Facades\Cache::put("room_active_state_{$room->id}", $state, 300);
                 $room->game_state = $state;
                 $room->save();
 
@@ -694,7 +729,7 @@ class GameRoomService
                 } catch (\Throwable $e) {}
             }
 
-            return $room->game_state ?? [];
+            return $state ?? [];
         });
     }
 }

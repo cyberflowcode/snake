@@ -21,12 +21,13 @@ class SnakeSimulationService
      * Available vibrant snake colors matching reference
      */
     public const PALETTE = [
-        'cyan'   => '#00e5ff',
-        'yellow' => '#ffd600',
-        'red'    => '#ff1744',
-        'purple' => '#d500f9',
-        'green'  => '#00e676',
-        'blue'   => '#2979ff',
+        'cyan'    => '#00e5ff',
+        'yellow'  => '#ffd600',
+        'red'     => '#ff1744',
+        'purple'  => '#d500f9',
+        'green'   => '#00e676',
+        'blue'    => '#2979ff',
+        'rainbow' => '#ff007f',
     ];
 
     /**
@@ -80,6 +81,7 @@ class SnakeSimulationService
             $idx++;
         }
 
+        $targetFood = (int)config('game.food_count', self::TARGET_FOOD_COUNT);
         $state = [
             'tick'            => 0,
             'status'          => 'countdown',
@@ -87,6 +89,7 @@ class SnakeSimulationService
             'countdown_ticks' => 30,
             'width'           => $width,
             'height'          => $height,
+            'food_count'      => $targetFood,
             'snakes'          => $snakes,
             'foods'           => [],
             'eliminations'    => [],
@@ -95,7 +98,7 @@ class SnakeSimulationService
         ];
 
         // Populate initial food
-        $state['foods'] = $this->spawnFoodBatch($state, self::TARGET_FOOD_COUNT);
+        $state['foods'] = $this->spawnFoodBatch($state, $targetFood);
 
         return $state;
     }
@@ -433,13 +436,21 @@ class SnakeSimulationService
             }
         }
 
-        // 7. Replenish food back to target count (safe placement not overlapping snakes)
-        $neededFood = self::TARGET_FOOD_COUNT - count($remainingFoods);
+        // 7. Replenish food back to target count (ambient food always maintained independently of drops)
+        $ambientCount = 0;
+        foreach ($remainingFoods as $f) {
+            if (!str_starts_with($f['id'], 'drop_') && !str_starts_with($f['id'], 'boost_')) {
+                $ambientCount++;
+            }
+        }
+
+        $targetAmbient = (int)($state['food_count'] ?? config('game.food_count', self::TARGET_FOOD_COUNT));
+        $neededFood = max(0, $targetAmbient - $ambientCount);
         if ($neededFood > 0) {
             $newBatch = $this->spawnFoodBatch($state, $neededFood);
             $remainingFoods = array_merge($remainingFoods, $newBatch);
         }
-        $state['foods'] = $remainingFoods;
+        $state['foods'] = array_values($remainingFoods);
 
         // 8. Check victory conditions
         // In global public rooms (continuous MMO arena), the game never finishes when a player crashes.
@@ -533,7 +544,7 @@ class SnakeSimulationService
 
             $foodVal = $this->getRandomFoodValue();
             $foods[] = [
-                'id'    => 'food_' . ($state['tick'] ?? 0) . '_' . uniqid(),
+                'id'    => 'food_' . ($state['tick'] ?? 0) . '_' . uniqid() . '_' . mt_rand(1000, 9999),
                 'x'     => $safeX,
                 'y'     => $safeY,
                 'value' => $foodVal,

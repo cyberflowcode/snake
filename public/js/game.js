@@ -116,11 +116,24 @@
     }
 
     function _bindEvents() {
-        // Color picker
+        // Color picker with persistence
+        const savedColor = localStorage.getItem('snake_preferred_color');
+        if (savedColor) {
+            el.colorOptions.forEach(o => {
+                if (o.dataset.color === savedColor) {
+                    el.colorOptions.forEach(x => x.classList.remove('selected'));
+                    o.classList.add('selected');
+                }
+            });
+        }
+
         el.colorOptions.forEach(opt => {
             opt.addEventListener('click', () => {
                 el.colorOptions.forEach(o => o.classList.remove('selected'));
                 opt.classList.add('selected');
+                if (opt.dataset.color) {
+                    localStorage.setItem('snake_preferred_color', opt.dataset.color);
+                }
             });
         });
 
@@ -676,9 +689,13 @@
             const card = document.createElement('div');
             card.className = 'player-card';
             const col = cmap[p.color] || cmap.cyan;
+            const isRainbow = (p.color === 'rainbow');
+            const dotStyle = isRainbow
+                ? 'background:conic-gradient(#ff1744,#ffd600,#00e676,#00e5ff,#d500f9,#ff1744);box-shadow:0 0 10px rgba(255,0,128,0.7);'
+                : `background:${col.main};box-shadow:0 0 8px ${col.main}`;
             card.innerHTML = `
                 <div class="p-info">
-                    <div class="dot" style="background:${col.main};box-shadow:0 0 8px ${col.main}"></div>
+                    <div class="dot" style="${dotStyle}"></div>
                     <span class="name">${_esc(p.nickname)}${p.id === myPlayer?.id ? ' (You)' : ''}</span>
                 </div>
                 ${(!isGlobal && p.is_host) ? '<span class="badge">HOST</span>' : ''}

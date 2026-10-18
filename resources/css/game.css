@@ -429,6 +429,24 @@ html, body {
     transform: scale(1.2);
 }
 
+.color-option-rainbow {
+    background: conic-gradient(from 0deg, #ff1744, #ff9100, #ffd600, #00e676, #00e5ff, #2979ff, #d500f9, #ff1744);
+    box-shadow: 0 0 10px rgba(255, 0, 128, 0.45);
+    animation: rainbow-glow-spin 4s linear infinite;
+    position: relative;
+}
+
+.color-option-rainbow.selected {
+    border-color: #ffffff;
+    box-shadow: 0 0 18px rgba(255, 0, 128, 0.9), 0 0 10px rgba(0, 229, 255, 0.8);
+    transform: scale(1.25);
+}
+
+@keyframes rainbow-glow-spin {
+    0% { filter: hue-rotate(0deg); }
+    100% { filter: hue-rotate(360deg); }
+}
+
 /* Button styles */
 .btn {
     width: 100%;
