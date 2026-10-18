@@ -655,25 +655,25 @@ class SnakeSimulationService
             $safeY = 0;
 
             do {
-                $safeX = round(rand($margin, $width - $margin), 1);
-                $safeY = round(rand($margin, $height - $margin), 1);
+                $safeX = (float)mt_rand($margin, $width - $margin);
+                $safeY = (float)mt_rand($margin, $height - $margin);
                 $isSafe = true;
 
-                // Ensure distance from active snakes
+                // Ensure distance from active snakes (>= 70px away)
                 if (!empty($state['snakes'])) {
                     foreach ($state['snakes'] as $snake) {
-                        if (!$snake['is_alive']) {
+                        if (empty($snake['is_alive'])) {
                             continue;
                         }
-                        $distSq = ($safeX - $snake['x']) ** 2 + ($safeY - $snake['y']) ** 2;
-                        if ($distSq < 70 ** 2) {
+                        $distSq = ($safeX - ($snake['x'] ?? 0)) ** 2 + ($safeY - ($snake['y'] ?? 0)) ** 2;
+                        if ($distSq < (70 ** 2)) {
                             $isSafe = false;
                             break;
                         }
                     }
                 }
                 $attempts++;
-            } while (!$isSafe && $attempts < 15);
+            } while (!$isSafe && $attempts < 20);
 
             $foodVal = $this->getRandomFoodValue();
             $foods[] = [
