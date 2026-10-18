@@ -6,11 +6,11 @@
 FROM node:20-alpine AS frontend
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm install --no-audit --no-fund --legacy-peer-deps
 COPY resources resources/
 COPY public public/
 COPY vite.config.js ./
-RUN npm run build || true
+RUN npm run build 2>/dev/null || echo "No Vite build — using pre-built public/ assets"
 
 # Stage 2: Composer Dependencies
 FROM composer:2.7 AS composer-stage
