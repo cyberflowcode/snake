@@ -419,6 +419,18 @@ class SnakeSimulationService
         $state['foods'] = $remainingFoods;
 
         // 8. Check victory conditions
+        // In global public rooms (continuous MMO arena), the game never finishes when a player crashes.
+        // Surviving players keep playing, and new/respawned players drop right in!
+        if (!empty($state['is_public'])) {
+            $activeSnakes = array_filter($snakes, fn($s) => empty($s['left_voluntarily']));
+            if (count($activeSnakes) === 0) {
+                $state['status'] = 'finished';
+                $state['finished_at'] = now()->toIso8601String();
+                $state['winner_id'] = null;
+            }
+            return $state;
+        }
+
         // Only count snakes that are still competing (not voluntarily left)
         $activeSnakes = array_filter($snakes, fn($s) => empty($s['left_voluntarily']));
         $alivePlayers = [];

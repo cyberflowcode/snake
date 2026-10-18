@@ -357,25 +357,27 @@
         const nick = (el.nicknameInput?.value || '').trim() || ('Viper_' + (Math.random() * 900 + 100 | 0));
         if (el.nicknameInput) el.nicknameInput.value = nick;
 
-        _btnState(el.btnPlayNow, true, 'Finding Arena...');
+        _btnState(el.btnPlayNow, true, 'Entering Arena...');
         try {
-            // Join the global public matchmaking room (20 players max, auto-creates new when full)
+            // Join global public matchmaking room (20 players max, NO HOST, direct play)
             const res = await _api('/api/rooms/global/join', 'POST', { nickname: nick, color: _getColor() });
             _saveSession(res.room.code, res.player, res.guest_token);
             _initWS(res.room.code);
 
-            const status = res.state?.status || res.room?.status;
+            currentRoom = res.room;
+            myPlayer    = res.player;
+            SnakeEngine.setMyPlayer(res.player?.id);
 
-            if (res.state && (status === 'in_progress' || status === 'countdown')) {
-                // Match already running — drop in directly
-                _onMatchStarted(res.state);
-                toast('⚡ Dropped into arena — good luck!');
-            } else {
-                // Lobby waiting for players — if host, show Start button; guests wait
-                _enterLobby(res.room, res.player);
-                const count = res.room.players?.length || 1;
-                toast(`✅ Joined global arena — ${count} player${count > 1 ? 's' : ''} ready!`);
-            }
+            // In global rooms, ALWAYS play directly! No host, no lobby stage!
+            const st = res.state || {
+                status: 'in_progress',
+                width: res.room?.width || 3200,
+                height: res.room?.height || 3200,
+                snakes: {},
+                foods: []
+            };
+            _onMatchStarted(st);
+            toast('🎮 Playing in Global Arena!');
         } catch (err) {
             toast(err.message || 'Cannot join arena');
         } finally {
@@ -651,14 +653,15 @@
         if (!el.lobbyPlayers) return;
         el.lobbyPlayers.innerHTML = '';
 
+        const isGlobal = Boolean(room.is_public || (room.max_players >= 20));
         const me     = (room.players || []).find(p => myPlayer && Number(p.id) === Number(myPlayer.id));
-        const isHost = me ? Boolean(me.is_host) : (myPlayer && Number(room.host_id) === Number(myPlayer.id));
+        const isHost = !isGlobal && (me ? Boolean(me.is_host) : (myPlayer && Number(room.host_id) === Number(myPlayer.id)));
 
-        // Only show Start Match button in the lobby — never during an active game
+        // Only show Start Match button in private lobbies — never in global rooms or active games
         const engineState = SnakeEngine.getAuthState();
         const gameActive  = engineState && (engineState.status === 'in_progress' || engineState.status === 'countdown');
         if (el.btnStart) {
-            el.btnStart.style.display = (isHost && !gameActive) ? 'inline-flex' : 'none';
+            el.btnStart.style.display = (!isGlobal && isHost && !gameActive) ? 'inline-flex' : 'none';
             el.btnStart.disabled  = false;
             el.btnStart.innerText = '🚀 Start Match Now';
         }
@@ -673,7 +676,7 @@
                     <div class="dot" style="background:${col.main};box-shadow:0 0 8px ${col.main}"></div>
                     <span class="name">${_esc(p.nickname)}${p.id === myPlayer?.id ? ' (You)' : ''}</span>
                 </div>
-                ${p.is_host ? '<span class="badge">HOST</span>' : ''}
+                ${(!isGlobal && p.is_host) ? '<span class="badge">HOST</span>' : ''}
             `;
             el.lobbyPlayers.appendChild(card);
         });
@@ -758,6 +761,12 @@
             const total = Object.keys(state.snakes).length;
             const rank  = me.rank || _rankOf(myPlayer.id, state.snakes);
             if (el.hudRank) el.hudRank.innerText = `${rank} of ${total}`;
+
+            // If my snake crashed in the global arena, prompt game-over for me so I can Play Again
+            const isGlobal = Boolean(currentRoom?.is_public || (currentRoom?.max_players >= 20));
+            if (isGlobal && !me.is_alive && el.gameOverModal.style.display !== 'flex' && el.welcomeModal.style.display !== 'flex') {
+                _onGameOver({ winner_id: null, scoreboard: _buildScoreboard(state) });
+            }
         }
 
         _updateLeaderboard(state.snakes);
@@ -798,12 +807,17 @@
         const cmap    = SnakeEngine.COLOR_MAP;
         const banner  = document.getElementById('winner-banner');
         const board   = document.getElementById('final-scoreboard');
+        const isGlobalRoom = Boolean(currentRoom?.is_public || (currentRoom?.max_players >= 20));
 
         const winner = results.winner_id && state?.snakes?.[results.winner_id];
         if (banner) {
-            banner.innerHTML = winner
-                ? `👑 Winner: <span style="color:${cmap[winner.color]?.main || '#ffd600'};font-weight:900">${_esc(winner.nickname)}</span>`
-                : '💥 Match Concluded!';
+            if (isGlobalRoom) {
+                banner.innerHTML = '💥 Snake Eliminated!';
+            } else {
+                banner.innerHTML = winner
+                    ? `👑 Winner: <span style="color:${cmap[winner.color]?.main || '#ffd600'};font-weight:900">${_esc(winner.nickname)}</span>`
+                    : '💥 Match Concluded!';
+            }
         }
 
         if (board) {

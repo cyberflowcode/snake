@@ -69,13 +69,13 @@ class GameRoomService
     /**
      * Find an open public (global) room or create a new one.
      * Rooms fill up to 20 players; a new room is spawned when full.
+     * There is NO HOST in global rooms — players join and play directly!
      */
     public function findOrCreateGlobalRoom(string $nickname, ?string $color = 'cyan'): array
     {
         return DB::transaction(function () use ($nickname, $color) {
-            // Find a public waiting room with available slots (< 20 players)
+            // Find a public room with available slots (< 20 players)
             $globalRoom = Room::where('is_public', true)
-                ->whereIn('status', ['waiting', 'in_progress', 'countdown'])
                 ->where('max_players', 20)
                 ->withCount('players')
                 ->having('players_count', '<', 20)
@@ -83,23 +83,30 @@ class GameRoomService
                 ->lockForUpdate()
                 ->first();
 
-            $creds  = Player::generateCredentials();
-            $isHost = false;
+            $creds = Player::generateCredentials();
 
             if (!$globalRoom) {
-                // No open global room — create a fresh one
+                // No open global room — create a fresh continuous arena
                 $code = Room::generateUniqueCode();
                 $globalRoom = Room::create([
-                    'code'        => $code,
-                    'name'        => 'Global Arena',
-                    'status'      => 'waiting',
-                    'is_public'   => true,
-                    'max_players' => 20,
-                    'tick_rate'   => config('game.tick_rate', 10),
-                    'width'       => config('game.width', 3200),
-                    'height'      => config('game.height', 3200),
+                    'code'           => $code,
+                    'name'           => 'Global Arena',
+                    'status'         => 'in_progress',
+                    'is_public'      => true,
+                    'max_players'    => 20,
+                    'tick_rate'      => config('game.tick_rate', 10),
+                    'width'          => config('game.width', 3200),
+                    'height'         => config('game.height', 3200),
+                    'host_player_id' => null, // NO HOST in global rooms
+                    'started_at'     => now(),
                 ]);
-                $isHost = true;
+            } else {
+                if ($globalRoom->status !== 'in_progress') {
+                    $globalRoom->status = 'in_progress';
+                }
+                if ($globalRoom->host_player_id !== null) {
+                    $globalRoom->host_player_id = null;
+                }
             }
 
             // Pick a distinct color
@@ -113,7 +120,7 @@ class GameRoomService
                 'nickname'     => $nickname,
                 'token_hash'   => $creds['token_hash'],
                 'color'        => $selectedColor,
-                'is_host'      => $isHost,
+                'is_host'      => false, // NEVER host in global rooms
                 'is_ready'     => true,
                 'is_alive'     => true,
                 'score'        => 0,
@@ -121,15 +128,28 @@ class GameRoomService
                 'last_seen_at' => now(),
             ]);
 
-            if ($isHost) {
-                $globalRoom->update(['host_player_id' => $player->id]);
-            }
-
             $gameState = null;
 
-            // If a match is already running, spawn this player's snake into it
-            if (in_array($globalRoom->status, ['in_progress', 'countdown']) && $globalRoom->game_state) {
+            if (!$globalRoom->game_state) {
+                // Initialize game state with this player's snake directly in_progress
+                $initialState = $this->simulation->initializeState(
+                    $globalRoom->width,
+                    $globalRoom->height,
+                    [$player->toArray()]
+                );
+                $initialState['status'] = 'in_progress';
+                $initialState['countdown'] = 0;
+                $initialState['countdown_ticks'] = 0;
+                $initialState['is_public'] = true;
+                $globalRoom->game_state = $initialState;
+                $globalRoom->status = 'in_progress';
+                $globalRoom->save();
+                $gameState = $initialState;
+            } else {
+                // Spawn this player's snake directly into the active arena
                 $state = $globalRoom->game_state;
+                $state['is_public'] = true;
+                $state['status'] = 'in_progress';
                 $newSnake = $this->simulation->createSnakeForPlayer(
                     $state['width'] ?? 3200,
                     $state['height'] ?? 3200,
@@ -142,11 +162,13 @@ class GameRoomService
                 $gameState = $state;
             }
 
-            // Broadcast that someone joined
+            // Broadcast that someone joined with their snake
             try {
                 broadcast(new PlayerJoined($globalRoom->code, $player->toArray()))->toOthers();
                 broadcast(new RoomStateChanged($globalRoom->code, $this->getLobbySnapshot($globalRoom->fresh(['players']))));
-                if ($gameState) broadcast(new \App\Events\GameStateUpdated($globalRoom->code, $gameState));
+                if ($gameState) {
+                    broadcast(new \App\Events\GameStateUpdated($globalRoom->code, $gameState));
+                }
             } catch (\Throwable $e) {}
 
             return [
@@ -154,7 +176,7 @@ class GameRoomService
                 'player'      => $player,
                 'guest_token' => $creds['raw_token'],
                 'state'       => $gameState,
-                'is_host'     => $isHost,
+                'is_host'     => false,
             ];
         });
     }
@@ -565,8 +587,8 @@ class GameRoomService
                 return;
             }
 
-            // Transfer host to the next player if host left
-            if ($wasHost) {
+            // Transfer host to the next player if host left (private rooms only)
+            if ($wasHost && !$room->is_public) {
                 $newHost = $remaining->first();
                 $newHost->update(['is_host' => true]);
                 $room->update(['host_player_id' => $newHost->id]);
@@ -595,17 +617,18 @@ class GameRoomService
             'code'        => $room->code,
             'name'        => $room->name,
             'status'      => $room->status,
+            'is_public'   => (bool)$room->is_public,
             'max_players' => $room->max_players,
             'tick_rate'   => $room->tick_rate,
             'width'       => $room->width,
             'height'      => $room->height,
-            'host_id'     => $room->host_player_id,
-            'players'     => $room->players->map(function ($p) {
+            'host_id'     => $room->is_public ? null : $room->host_player_id,
+            'players'     => $room->players->map(function ($p) use ($room) {
                 return [
                     'id'       => $p->id,
                     'nickname' => $p->nickname,
                     'color'    => $p->color,
-                    'is_host'  => (bool)$p->is_host,
+                    'is_host'  => $room->is_public ? false : (bool)$p->is_host,
                     'is_ready' => (bool)$p->is_ready,
                     'score'    => $p->score,
                     'rank'     => $p->rank,
