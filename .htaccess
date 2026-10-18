@@ -1,0 +1,7 @@
+<IfModule mod_rewrite.c>
+    RewriteEngine On
+    RewriteBase /snake/
+    RewriteCond %{REQUEST_URI} !^/snake/public/
+    RewriteRule ^(.*)$ public/$1 [L,QSA]
+</IfModule>
+
