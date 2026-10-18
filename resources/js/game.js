@@ -29,8 +29,14 @@
     let lastSendTime  = 0;
 
     // Score tracking (optimistic)
-    let localScore  = 0;
-    let localLength = 14;
+    let localScore      = 0;
+    let localBestScore  = 0;
+    let localLength     = 14;
+
+    // Leaderboard state
+    let leaderboardMode = 'live'; // 'live' or 'alltime'
+    let cachedAllTimeLeaderboard = [];
+    let lastAllTimeFetch = 0;
 
     // Track last processed state tick to prevent HTTP/WebSocket race conditions
     let lastProcessedTick = -1;
@@ -46,6 +52,7 @@
         _setupCanvas();
         _bindEvents();
         _checkSavedSession();
+        _fetchAllTimeLeaderboard(false);
 
         networkTimer = setInterval(_networkTick, 80);   // ~12 Hz
 
@@ -87,6 +94,11 @@
         el.btnHudExit      = document.getElementById('btn-hud-exit');
         el.hudRoom         = document.getElementById('hud-room-code');
         el.hudLeaderboard  = document.getElementById('hud-leaderboard-list');
+        el.lbTabLive       = document.getElementById('lb-tab-live');
+        el.lbTabAlltime    = document.getElementById('lb-tab-alltime');
+        el.lbHeading       = document.getElementById('lb-heading');
+        el.welcomeLbList   = document.getElementById('welcome-lb-list');
+        el.welcomeLbStatus = document.getElementById('welcome-lb-status');
         el.hudLength       = document.getElementById('hud-length');
         el.hudRank         = document.getElementById('hud-rank');
         el.hudScore        = document.getElementById('hud-score');
@@ -136,6 +148,40 @@
                 }
             });
         });
+
+        // Nickname persistence & change listeners
+        const savedNick = localStorage.getItem('snake_player_nickname');
+        if (savedNick && el.nicknameInput) {
+            el.nicknameInput.value = savedNick;
+        }
+        if (el.nicknameInput) {
+            el.nicknameInput.addEventListener('input', () => {
+                const val = el.nicknameInput.value.trim();
+                if (val) localStorage.setItem('snake_player_nickname', val);
+            });
+        }
+
+        // Leaderboard tabs (Live Arena vs Saved All-Time High Scores)
+        if (el.lbTabLive) {
+            el.lbTabLive.addEventListener('click', () => {
+                leaderboardMode = 'live';
+                el.lbTabLive.classList.add('active');
+                el.lbTabAlltime?.classList.remove('active');
+                if (el.lbHeading) el.lbHeading.innerText = 'Live Arena';
+                const state = SnakeEngine.getAuthState();
+                _updateLeaderboard(state?.snakes || {});
+            });
+        }
+
+        if (el.lbTabAlltime) {
+            el.lbTabAlltime.addEventListener('click', () => {
+                leaderboardMode = 'alltime';
+                el.lbTabAlltime.classList.add('active');
+                el.lbTabLive?.classList.remove('active');
+                if (el.lbHeading) el.lbHeading.innerText = '🏆 Saved High Scores';
+                _fetchAllTimeLeaderboard(true);
+            });
+        }
 
         // Enter key on nickname → if room code filled go to join, else play now
         if (el.nicknameInput) {
@@ -372,6 +418,7 @@
     async function playNow() {
         const nick = (el.nicknameInput?.value || '').trim() || ('Viper_' + (Math.random() * 900 + 100 | 0));
         if (el.nicknameInput) el.nicknameInput.value = nick;
+        localStorage.setItem('snake_player_nickname', nick);
 
         _btnState(el.btnPlayNow, true, 'Entering Arena...');
         try {
@@ -403,6 +450,7 @@
 
     async function createRoom() {
         const nick = (el.nicknameInput?.value || '').trim() || ('Viper_' + (Math.random() * 900 + 100 | 0));
+        localStorage.setItem('snake_player_nickname', nick);
         _btnState(el.btnCreate, true, 'Creating...');
         try {
             const res = await _api('/api/rooms', 'POST', { nickname: nick, color: _getColor(), max_players: 8 });
@@ -421,6 +469,7 @@
         const code = (el.roomCodeInput?.value || '').trim().toUpperCase();
         if (!nick)  { toast('Enter a nickname first!'); el.nicknameInput?.focus(); return; }
         if (!code)  { toast('Enter the room code!'); el.roomCodeInput?.focus(); return; }
+        localStorage.setItem('snake_player_nickname', nick);
 
         _btnState(el.btnJoin, true, 'Joining...');
         try {
@@ -799,6 +848,7 @@
 
     async function _doRespawn() {
         if (!currentRoom) return;
+        localBestScore = Math.max(localBestScore, localScore);
         try {
             const res = await _api(`/api/rooms/${currentRoom.code}/respawn`, 'POST');
             if (res?.state) {
@@ -833,6 +883,7 @@
             localScore  += val;
             localLength += Math.max(1, Math.round(val / 100));
         });
+        localBestScore = Math.max(localBestScore, localScore);
 
         if (el.hudScore)  el.hudScore.innerText  = localScore.toLocaleString();
         if (el.hudLength) el.hudLength.innerText = localLength;
@@ -844,6 +895,8 @@
             // Sync from authoritative when server has higher value
             if (me.score  > localScore)  localScore  = me.score;
             if (me.length > localLength) localLength  = me.length;
+            const serverBest = me.best_score || me.score || 0;
+            localBestScore = Math.max(localBestScore, localScore, serverBest);
 
             const total = Object.keys(state.snakes).length;
             const rank  = me.rank || _rankOf(myPlayer.id, state.snakes);
@@ -869,34 +922,127 @@
     }
 
     function _rankOf(id, snakes) {
-        const sorted = Object.values(snakes).sort((a, b) => b.score - a.score);
-        const idx    = sorted.findIndex(s => Number(s.id) === Number(id));
+        const sorted = Object.values(snakes).sort((a, b) => {
+            const sa = Math.max(a.score || 0, a.best_score || 0);
+            const sb = Math.max(b.score || 0, b.best_score || 0);
+            return sb - sa;
+        });
+        const idx = sorted.findIndex(s => Number(s.id) === Number(id));
         return idx !== -1 ? idx + 1 : 1;
     }
 
     function _updateLeaderboard(snakes) {
-        if (!el.hudLeaderboard || !snakes) return;
+        if (!el.hudLeaderboard) return;
+
+        // If user is currently looking at All-Time saved scores, don't overwrite with live
+        if (leaderboardMode === 'alltime') {
+            if (Date.now() - lastAllTimeFetch > 15000) {
+                _fetchAllTimeLeaderboard(true);
+            }
+            return;
+        }
+
+        if (!snakes) return;
         const cmap   = SnakeEngine.COLOR_MAP;
         const ranked = SnakeEngine.RANK_COLORS;
         const snakeList = Object.values(snakes).filter(s => !s.left_voluntarily);
 
         const sorted = snakeList.map(s => {
-            let score = s.score || 0;
-            if (myPlayer && Number(s.id) === Number(myPlayer.id) && localScore > score) {
-                score = localScore;
+            let score = Math.max(s.score || 0, s.best_score || 0);
+            if (myPlayer && Number(s.id) === Number(myPlayer.id)) {
+                score = Math.max(score, localScore, localBestScore);
+                localBestScore = score;
             }
             return { ...s, score };
         }).sort((a, b) => b.score - a.score).slice(0, 10);
 
         el.hudLeaderboard.innerHTML = '';
+        if (sorted.length === 0) {
+            el.hudLeaderboard.innerHTML = '<div class="leaderboard-item"><span class="name" style="color:#8b9bb4;">Waiting for players...</span></div>';
+            return;
+        }
+
         sorted.forEach((s, i) => {
             const col = cmap[s.color] || cmap.cyan;
+            const isMe = myPlayer && Number(s.id) === Number(myPlayer.id);
             const row = document.createElement('div');
-            row.className = 'leaderboard-item';
+            row.className = 'leaderboard-item' + (isMe ? ' me' : '');
             row.innerHTML = `
                 <span class="rank" style="color:${ranked[i % ranked.length]}">#${i + 1}</span>
-                <span class="name" style="color:${s.is_alive ? col.text : '#757575'}">${_esc(s.nickname)}</span>
-                <span class="score">${s.score}</span>
+                <span class="name" style="color:${s.is_alive ? col.text : '#757575'}">${_esc(s.nickname)}${isMe ? ' (You)' : ''}</span>
+                <span class="score">${s.score.toLocaleString()}</span>
+            `;
+            el.hudLeaderboard.appendChild(row);
+        });
+    }
+
+    async function _fetchAllTimeLeaderboard(renderHud = false) {
+        try {
+            const res = await _api('/api/leaderboard', 'GET');
+            if (res && Array.isArray(res.leaderboard)) {
+                cachedAllTimeLeaderboard = res.leaderboard;
+                lastAllTimeFetch = Date.now();
+                _renderWelcomeLeaderboard(cachedAllTimeLeaderboard);
+                if (renderHud || leaderboardMode === 'alltime') {
+                    _renderAllTimeLeaderboard(cachedAllTimeLeaderboard);
+                }
+            }
+        } catch (err) {
+            if (el.welcomeLbStatus) el.welcomeLbStatus.innerText = 'Offline';
+        }
+    }
+
+    function _renderWelcomeLeaderboard(list) {
+        if (!el.welcomeLbList) return;
+        if (el.welcomeLbStatus) el.welcomeLbStatus.innerText = `${list.length} Champions`;
+
+        if (!list || list.length === 0) {
+            el.welcomeLbList.innerHTML = '<div style="font-size:11px;color:#8b9bb4;text-align:center;padding:10px 0;">No saved high scores yet. Play now to be #1!</div>';
+            return;
+        }
+
+        const rankColors = ['#ffd600', '#c0c0c0', '#cd7f32', '#00e5ff', '#00e676', '#d500f9', '#2979ff'];
+        el.welcomeLbList.innerHTML = '';
+        list.slice(0, 8).forEach((item, idx) => {
+            const row = document.createElement('div');
+            row.className = 'welcome-lb-row' + (idx === 0 ? ' top-1' : '');
+            const col = rankColors[idx] || '#8b9bb4';
+            const currentNick = (el.nicknameInput?.value || '').trim().toLowerCase();
+            const isCurrentNick = currentNick && currentNick === (item.player_nickname || '').toLowerCase();
+
+            row.innerHTML = `
+                <span class="lb-rank" style="color:${col}">#${idx + 1}</span>
+                <span class="lb-name" style="${isCurrentNick ? 'color:#00e5ff;font-weight:800;' : ''}">
+                    ${_esc(item.player_nickname)} ${isCurrentNick ? '⭐' : ''}
+                </span>
+                <span class="lb-score">${Number(item.high_score).toLocaleString()}</span>
+                <span class="lb-games">${item.games_played || 1}G</span>
+            `;
+            el.welcomeLbList.appendChild(row);
+        });
+    }
+
+    function _renderAllTimeLeaderboard(list) {
+        if (!el.hudLeaderboard) return;
+        const ranked = SnakeEngine.RANK_COLORS || ['#ffd600', '#d500f9', '#00e5ff', '#00e676'];
+        el.hudLeaderboard.innerHTML = '';
+
+        if (!list || list.length === 0) {
+            el.hudLeaderboard.innerHTML = '<div class="leaderboard-item"><span class="name" style="color:#8b9bb4;">No saved scores yet</span></div>';
+            return;
+        }
+
+        const myNick = (el.nicknameInput?.value || '').trim().toLowerCase();
+        list.slice(0, 10).forEach((item, idx) => {
+            const isMe = myNick && (item.player_nickname || '').toLowerCase() === myNick;
+            const row = document.createElement('div');
+            row.className = 'leaderboard-item' + (isMe ? ' me' : '');
+            row.innerHTML = `
+                <span class="rank" style="color:${ranked[idx % ranked.length]}">#${idx + 1}</span>
+                <span class="name" style="color:${idx === 0 ? '#ffd600' : (isMe ? '#00e5ff' : '#e0e7ff')}">
+                    ${_esc(item.player_nickname)}${isMe ? ' (You)' : ''}
+                </span>
+                <span class="score">${Number(item.high_score).toLocaleString()}</span>
             `;
             el.hudLeaderboard.appendChild(row);
         });

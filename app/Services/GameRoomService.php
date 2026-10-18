@@ -626,8 +626,9 @@ class GameRoomService
                 $state = ($cachedState && is_array($cachedState)) ? $cachedState : $room->game_state;
                 if (isset($state['snakes'][$player->id])) {
                     $s = $state['snakes'][$player->id];
-                    if (!empty($s['nickname']) && ($s['score'] ?? 0) > 0) {
-                        Leaderboard::recordGame($s['nickname'], (int)$s['score'], false);
+                    $scoreToSave = max((int)($s['score'] ?? 0), (int)($s['best_score'] ?? 0));
+                    if (!empty($s['nickname']) && $scoreToSave > 0) {
+                        Leaderboard::updateScore($s['nickname'], $scoreToSave, false);
                     }
                     unset($state['snakes'][$player->id]);
                     $room->game_state = $state;
@@ -739,6 +740,9 @@ class GameRoomService
 
             $state = \Illuminate\Support\Facades\Cache::get("room_active_state_{$room->id}") ?: $room->game_state;
             if ($state) {
+                $prevSnake = $state['snakes'][$player->id] ?? null;
+                $prevBest = max((int)($prevSnake['score'] ?? 0), (int)($prevSnake['best_score'] ?? 0), (int)$player->score);
+
                 $newSnake = $this->simulation->createSnakeForPlayer(
                     $state['width'] ?? 3200,
                     $state['height'] ?? 3200,
@@ -746,6 +750,8 @@ class GameRoomService
                     $state['snakes'] ?? [],
                     $state['tick'] ?? 0
                 );
+                $newSnake['score'] = 0;
+                $newSnake['best_score'] = $prevBest;
                 $state['snakes'][$player->id] = $newSnake;
                 \Illuminate\Support\Facades\Cache::put("room_active_state_{$room->id}", $state, 300);
                 $room->game_state = $state;
@@ -771,13 +777,14 @@ class GameRoomService
         if (isset($state['snakes']) && is_array($state['snakes'])) {
             foreach ($state['snakes'] as $pid => $snakeData) {
                 if (is_numeric($pid)) {
+                    $scoreToSave = max((int)($snakeData['score'] ?? 0), (int)($snakeData['best_score'] ?? 0));
                     Player::where('id', (int)$pid)->update([
-                        'score'    => (int)($snakeData['score'] ?? 0),
+                        'score'    => $scoreToSave,
                         'length'   => (int)($snakeData['length'] ?? SnakeSimulationService::MIN_STARTING_LENGTH),
                         'is_alive' => (bool)($snakeData['is_alive'] ?? false),
                     ]);
-                    if (!empty($snakeData['nickname']) && ($snakeData['score'] ?? 0) > 0) {
-                        Leaderboard::recordGame($snakeData['nickname'], (int)$snakeData['score'], false);
+                    if (!empty($snakeData['nickname']) && $scoreToSave > 0) {
+                        Leaderboard::updateScore($snakeData['nickname'], $scoreToSave, false);
                     }
                 }
             }

@@ -29,7 +29,11 @@
 
         <!-- Top-Right Leaderboard (Matching Reference Image) -->
         <div class="hud-leaderboard glass-panel">
-            <div class="leaderboard-title">Leaderboard</div>
+            <div class="leaderboard-tabs">
+                <button type="button" class="lb-tab active" id="lb-tab-live">Live</button>
+                <button type="button" class="lb-tab" id="lb-tab-alltime">🏆 All-Time</button>
+            </div>
+            <div class="leaderboard-title" id="lb-heading">Live Arena</div>
             <div id="hud-leaderboard-list">
                 <div class="leaderboard-item">
                     <span class="rank" style="color: #d500f9;">#1</span>
@@ -152,6 +156,17 @@
                         ⚡ Join Existing Arena
                     </button>
                 @endif
+ 
+                <!-- Hall of Fame Saved Leaderboard Section -->
+                <div class="welcome-leaderboard-section">
+                    <div class="welcome-lb-header">
+                        <span class="welcome-lb-title">🏆 Saved High Scores (Hall of Fame)</span>
+                        <span class="welcome-lb-badge" id="welcome-lb-status">Live DB</span>
+                    </div>
+                    <div class="welcome-lb-list" id="welcome-lb-list">
+                        <div style="font-size: 11px; color: #8b9bb4; text-align: center; padding: 8px 0;">Loading high scores...</div>
+                    </div>
+                </div>
 
             </div>
         </div>

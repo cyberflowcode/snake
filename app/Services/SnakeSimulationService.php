@@ -74,6 +74,7 @@ class SnakeSimulationService
                 'is_alive'                => true,
                 'length'                  => self::MIN_STARTING_LENGTH,
                 'score'                   => 0,
+                'best_score'              => (int)($player['score'] ?? 0),
                 'body'                    => $body,
                 'rank'                    => null,
                 'eliminated_at'           => null,
@@ -202,6 +203,7 @@ class SnakeSimulationService
             'is_alive'                => true,
             'length'                  => self::MIN_STARTING_LENGTH,
             'score'                   => 0,
+            'best_score'              => (int)($player['score'] ?? 0),
             'body'                    => $body,
             'rank'                    => null,
             'eliminated_at'           => null,
@@ -256,11 +258,15 @@ class SnakeSimulationService
 
                 if (!$snake['is_alive']) {
                     if (isset($snake['respawn_tick']) && $state['tick'] >= $snake['respawn_tick']) {
+                        $prevBest = max((int)($snake['score'] ?? 0), (int)($snake['best_score'] ?? 0));
                         $freshSnake = $this->createSnakeForPlayer($width, $height, [
                             'id'       => $id,
                             'nickname' => $snake['nickname'],
                             'color'    => $snake['color'],
+                            'score'    => 0,
                         ], $snakes, $state['tick']);
+                        $freshSnake['score'] = 0;
+                        $freshSnake['best_score'] = $prevBest;
                         $snake = $freshSnake;
                     }
                 }
@@ -463,6 +469,16 @@ class SnakeSimulationService
             $snake['is_alive'] = false;
             $snake['eliminated_at'] = $state['tick'];
             $snake['rank'] = $aliveCountBefore;
+
+            $finalScore = max((int)($snake['score'] ?? 0), (int)($snake['best_score'] ?? 0));
+            $snake['best_score'] = $finalScore;
+
+            // Immediately persist eliminated snake's score to Leaderboard and Player in MySQL
+            if (!empty($snake['nickname']) && $finalScore > 0) {
+                \App\Models\Leaderboard::updateScore($snake['nickname'], $finalScore, false);
+                \App\Models\Player::where('id', (int)$id)->update(['score' => $finalScore]);
+            }
+
             if (!empty($state['is_public'])) {
                 // Auto-respawn after 3 seconds (30 ticks at 10 ticks/s)
                 $snake['respawn_tick'] = $state['tick'] + 30;
@@ -471,7 +487,7 @@ class SnakeSimulationService
                 'player_id' => $id,
                 'nickname'  => $snake['nickname'],
                 'reason'    => $reason,
-                'score'     => $snake['score'],
+                'score'     => $finalScore,
                 'length'    => $snake['length'],
             ];
 
@@ -518,6 +534,7 @@ class SnakeSimulationService
                 if ($distSq < (self::HEAD_RADIUS + self::FOOD_RADIUS + 4.0) ** 2) {
                     $foodVal = (int)($food['value'] ?? 100);
                     $snake['score'] += $foodVal;
+                    $snake['best_score'] = max((int)($snake['best_score'] ?? 0), (int)$snake['score']);
                     $snake['length'] += $this->getGrowthForScore($foodVal);
                     $eaten = true;
                     $eatenFoodIds[] = $food['id'];
