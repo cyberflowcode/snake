@@ -165,6 +165,13 @@ class GameRoomController extends Controller
             'boost' => $boost,
         ], 10);
 
+        // Keep player activity timestamp fresh every 5s without overloading DB
+        $seenKey = "player_last_seen_touch_{$player->id}";
+        if (!Cache::has($seenKey)) {
+            $player->update(['last_seen_at' => now()]);
+            Cache::put($seenKey, true, 5);
+        }
+
         // Advance simulation if due
         $room = $player->room;
         $state = null;

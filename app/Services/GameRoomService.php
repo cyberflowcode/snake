@@ -129,8 +129,10 @@ class GameRoomService
             ]);
 
             $gameState = null;
+            $cachedState = \Illuminate\Support\Facades\Cache::get("room_active_state_{$globalRoom->id}");
+            $baseState = ($cachedState && is_array($cachedState)) ? $cachedState : $globalRoom->game_state;
 
-            if (!$globalRoom->game_state) {
+            if (!$baseState) {
                 // Initialize game state with this player's snake directly in_progress
                 $initialState = $this->simulation->initializeState(
                     $globalRoom->width,
@@ -141,24 +143,42 @@ class GameRoomService
                 $initialState['countdown'] = 0;
                 $initialState['countdown_ticks'] = 0;
                 $initialState['is_public'] = true;
+                $initialState['pending_food_respawns'] = [];
+                $initialState['snakes'][$player->id]['invulnerable_until_tick'] = (int)ceil((float)config('game.spawn_protection_seconds', 2.5) * 10);
                 $globalRoom->game_state = $initialState;
                 $globalRoom->status = 'in_progress';
                 $globalRoom->save();
+                \Illuminate\Support\Facades\Cache::put("room_active_state_{$globalRoom->id}", $initialState, 300);
                 $gameState = $initialState;
             } else {
                 // Spawn this player's snake directly into the active arena
-                $state = $globalRoom->game_state;
+                $state = $baseState;
                 $state['is_public'] = true;
                 $state['status'] = 'in_progress';
+
+                // Prune ghost snakes whose player record no longer exists or is inactive in this room
+                $activePlayerIds = Player::where('room_id', $globalRoom->id)
+                    ->where('last_seen_at', '>=', now()->subSeconds(20))
+                    ->pluck('id')->map(fn($v) => (int)$v)->toArray();
+                if (isset($state['snakes']) && is_array($state['snakes'])) {
+                    foreach ($state['snakes'] as $sid => $s) {
+                        if (!in_array((int)$sid, $activePlayerIds) && (int)$sid !== (int)$player->id) {
+                            unset($state['snakes'][$sid]);
+                        }
+                    }
+                }
+
                 $newSnake = $this->simulation->createSnakeForPlayer(
                     $state['width'] ?? 3200,
                     $state['height'] ?? 3200,
                     $player->toArray(),
-                    $state['snakes'] ?? []
+                    $state['snakes'] ?? [],
+                    $state['tick'] ?? 0
                 );
                 $state['snakes'][$player->id] = $newSnake;
                 $globalRoom->game_state = $state;
                 $globalRoom->save();
+                \Illuminate\Support\Facades\Cache::put("room_active_state_{$globalRoom->id}", $state, 300);
                 $gameState = $state;
             }
 
@@ -230,13 +250,15 @@ class GameRoomService
 
             // If match is already in progress or countdown, spawn player's snake directly into arena!
             if (($room->status === 'in_progress' || $room->status === 'countdown') && $room->game_state) {
-                $state = $room->game_state;
+                $cachedState = \Illuminate\Support\Facades\Cache::get("room_active_state_{$room->id}");
+                $state = ($cachedState && is_array($cachedState)) ? $cachedState : $room->game_state;
                 $width = $state['width'] ?? 2400;
                 $height = $state['height'] ?? 2400;
-                $newSnake = $this->simulation->createSnakeForPlayer($width, $height, $player->toArray(), $state['snakes'] ?? []);
+                $newSnake = $this->simulation->createSnakeForPlayer($width, $height, $player->toArray(), $state['snakes'] ?? [], $state['tick'] ?? 0);
                 $state['snakes'][$player->id] = $newSnake;
                 $room->game_state = $state;
                 $room->save();
+                \Illuminate\Support\Facades\Cache::put("room_active_state_{$room->id}", $state, 300);
             }
 
             $roomData = $room->fresh(['players']);
@@ -355,8 +377,7 @@ class GameRoomService
             } catch (\Throwable $e) {}
         } elseif (($updatedState['tick'] ?? 0) % 30 === 0) {
             // Periodic sync to MySQL every 3 seconds to avoid unnecessary DB load while persisting state
-            $room->game_state = $updatedState;
-            $room->save();
+            $this->persistLiveScores($room, $updatedState);
         }
 
         try {
@@ -463,8 +484,10 @@ class GameRoomService
                             'scoreboard' => $this->buildScoreboard($room, $state),
                         ]));
                     } catch (\Throwable $e) {}
+                } else {
+                    // Periodic live persistence for ongoing games & continuous global rooms
+                    $this->persistLiveScores($room, $state);
                 }
-                $room->save();
             }
 
             try {
@@ -597,16 +620,19 @@ class GameRoomService
         DB::transaction(function () use ($room, $player) {
             $wasHost = $player->is_host;
 
-            // If a match is running, mark the leaving player's snake as voluntarily left
-            // so the simulation's winner detection ignores it (game keeps running for others)
+            // If a match is running, record any score and remove the leaving player's snake completely
             if (in_array($room->status, ['in_progress', 'countdown']) && $room->game_state) {
-                $state = $room->game_state;
+                $cachedState = \Illuminate\Support\Facades\Cache::get("room_active_state_{$room->id}");
+                $state = ($cachedState && is_array($cachedState)) ? $cachedState : $room->game_state;
                 if (isset($state['snakes'][$player->id])) {
-                    $state['snakes'][$player->id]['is_alive']         = false;
-                    $state['snakes'][$player->id]['left_voluntarily'] = true;
-                    $state['snakes'][$player->id]['eliminated_at']    = $state['tick'] ?? 0;
+                    $s = $state['snakes'][$player->id];
+                    if (!empty($s['nickname']) && ($s['score'] ?? 0) > 0) {
+                        Leaderboard::recordGame($s['nickname'], (int)$s['score'], false);
+                    }
+                    unset($state['snakes'][$player->id]);
                     $room->game_state = $state;
                     $room->save();
+                    \Illuminate\Support\Facades\Cache::put("room_active_state_{$room->id}", $state, 300);
                 }
             }
 
@@ -717,7 +743,8 @@ class GameRoomService
                     $state['width'] ?? 3200,
                     $state['height'] ?? 3200,
                     $player->toArray(),
-                    $state['snakes'] ?? []
+                    $state['snakes'] ?? [],
+                    $state['tick'] ?? 0
                 );
                 $state['snakes'][$player->id] = $newSnake;
                 \Illuminate\Support\Facades\Cache::put("room_active_state_{$room->id}", $state, 300);
@@ -731,5 +758,29 @@ class GameRoomService
 
             return $state ?? [];
         });
+    }
+
+    /**
+     * Persist live snake scores and lengths to MySQL and Leaderboards.
+     */
+    public function persistLiveScores(Room $room, array $state): void
+    {
+        $room->game_state = $state;
+        $room->save();
+
+        if (isset($state['snakes']) && is_array($state['snakes'])) {
+            foreach ($state['snakes'] as $pid => $snakeData) {
+                if (is_numeric($pid)) {
+                    Player::where('id', (int)$pid)->update([
+                        'score'    => (int)($snakeData['score'] ?? 0),
+                        'length'   => (int)($snakeData['length'] ?? SnakeSimulationService::MIN_STARTING_LENGTH),
+                        'is_alive' => (bool)($snakeData['is_alive'] ?? false),
+                    ]);
+                    if (!empty($snakeData['nickname']) && ($snakeData['score'] ?? 0) > 0) {
+                        Leaderboard::recordGame($snakeData['nickname'], (int)$snakeData['score'], false);
+                    }
+                }
+            }
+        }
     }
 }

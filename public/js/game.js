@@ -878,7 +878,15 @@
         if (!el.hudLeaderboard || !snakes) return;
         const cmap   = SnakeEngine.COLOR_MAP;
         const ranked = SnakeEngine.RANK_COLORS;
-        const sorted = Object.values(snakes).sort((a, b) => b.score - a.score).slice(0, 10);
+        const snakeList = Object.values(snakes).filter(s => !s.left_voluntarily);
+
+        const sorted = snakeList.map(s => {
+            let score = s.score || 0;
+            if (myPlayer && Number(s.id) === Number(myPlayer.id) && localScore > score) {
+                score = localScore;
+            }
+            return { ...s, score };
+        }).sort((a, b) => b.score - a.score).slice(0, 10);
 
         el.hudLeaderboard.innerHTML = '';
         sorted.forEach((s, i) => {

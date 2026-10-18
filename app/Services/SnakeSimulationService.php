@@ -62,39 +62,42 @@ class SnakeSimulationService
             }
 
             $snakes[$player['id']] = [
-                'id'            => $player['id'],
-                'nickname'      => $player['nickname'],
-                'color'         => $color,
-                'x'             => round($spawnX, 1),
-                'y'             => round($spawnY, 1),
-                'angle'         => round($facingAngle, 3),
-                'target_angle'  => round($facingAngle, 3),
-                'speed'         => self::BASE_SPEED,
-                'is_boosting'   => false,
-                'is_alive'      => true,
-                'length'        => self::MIN_STARTING_LENGTH,
-                'score'         => 0,
-                'body'          => $body,
-                'rank'          => null,
-                'eliminated_at' => null,
+                'id'                      => $player['id'],
+                'nickname'                => $player['nickname'],
+                'color'                   => $color,
+                'x'                       => round($spawnX, 1),
+                'y'                       => round($spawnY, 1),
+                'angle'                   => round($facingAngle, 3),
+                'target_angle'            => round($facingAngle, 3),
+                'speed'                   => self::BASE_SPEED,
+                'is_boosting'             => false,
+                'is_alive'                => true,
+                'length'                  => self::MIN_STARTING_LENGTH,
+                'score'                   => 0,
+                'body'                    => $body,
+                'rank'                    => null,
+                'eliminated_at'           => null,
+                'invulnerable_until_tick' => 0,
+                'last_active_tick'        => 0,
             ];
             $idx++;
         }
 
         $targetFood = (int)config('game.food_count', self::TARGET_FOOD_COUNT);
         $state = [
-            'tick'            => 0,
-            'status'          => 'countdown',
-            'countdown'       => 3,
-            'countdown_ticks' => 30,
-            'width'           => $width,
-            'height'          => $height,
-            'food_count'      => $targetFood,
-            'snakes'          => $snakes,
-            'foods'           => [],
-            'eliminations'    => [],
-            'winner_id'       => null,
-            'finished_at'     => null,
+            'tick'                   => 0,
+            'status'                 => 'countdown',
+            'countdown'              => 3,
+            'countdown_ticks'        => 30,
+            'width'                  => $width,
+            'height'                 => $height,
+            'food_count'             => $targetFood,
+            'snakes'                 => $snakes,
+            'foods'                  => [],
+            'pending_food_respawns'  => [],
+            'eliminations'           => [],
+            'winner_id'              => null,
+            'finished_at'            => null,
         ];
 
         // Populate initial food
@@ -105,19 +108,74 @@ class SnakeSimulationService
 
     /**
      * Spawn a new snake for a player joining an active or waiting arena.
+     * Uses safe coordinate search to ensure snakes never spawn into obstacles or other snakes.
      */
-    public function createSnakeForPlayer(int $width, int $height, array $player, array $existingSnakes = []): array
+    public function createSnakeForPlayer(int $width, int $height, array $player, array $existingSnakes = [], int $currentTick = 0): array
     {
         $colorKeys = array_keys(self::PALETTE);
         $centerX = $width / 2.0;
         $centerY = $height / 2.0;
 
-        $angle = (mt_rand(0, 6283) / 1000.0);
-        $radius = min($width, $height) * (0.18 + (mt_rand(0, 15) / 100.0));
+        // Safe spawn search: find a location away from borders (>= 200px) and away from other snakes (>= 220px)
+        $margin = 200;
+        $minX = $margin;
+        $maxX = max($margin + 100, $width - $margin);
+        $minY = $margin;
+        $maxY = max($margin + 100, $height - $margin);
 
-        $spawnX = $centerX + cos($angle) * $radius;
-        $spawnY = $centerY + sin($angle) * $radius;
-        $facingAngle = $this->normalizeAngle($angle + M_PI);
+        $bestX = $centerX;
+        $bestY = $centerY;
+        $bestDist = -1;
+
+        for ($attempt = 0; $attempt < 30; $attempt++) {
+            $candX = mt_rand($minX, $maxX);
+            $candY = mt_rand($minY, $maxY);
+
+            $minDistToSnake = 999999;
+            foreach ($existingSnakes as $otherSnake) {
+                if (empty($otherSnake['is_alive'])) {
+                    continue;
+                }
+                // Check head distance
+                $dx = $candX - ($otherSnake['x'] ?? 0);
+                $dy = $candY - ($otherSnake['y'] ?? 0);
+                $d = sqrt($dx * $dx + $dy * $dy);
+                if ($d < $minDistToSnake) {
+                    $minDistToSnake = $d;
+                }
+                // Check body segment distance
+                foreach (($otherSnake['body'] ?? []) as $seg) {
+                    $bdx = $candX - ($seg['x'] ?? 0);
+                    $bdy = $candY - ($seg['y'] ?? 0);
+                    $bd = sqrt($bdx * $bdx + $bdy * $bdy);
+                    if ($bd < $minDistToSnake) {
+                        $minDistToSnake = $bd;
+                    }
+                }
+            }
+
+            if ($minDistToSnake >= 220) {
+                $bestX = $candX;
+                $bestY = $candY;
+                $bestDist = $minDistToSnake;
+                break;
+            }
+
+            if ($minDistToSnake > $bestDist) {
+                $bestDist = $minDistToSnake;
+                $bestX = $candX;
+                $bestY = $candY;
+            }
+        }
+
+        $spawnX = $bestX;
+        $spawnY = $bestY;
+
+        // Face towards arena center with slight randomness
+        $toCenterX = $centerX - $spawnX;
+        $toCenterY = $centerY - $spawnY;
+        $facingAngle = atan2($toCenterY, $toCenterX) + ((mt_rand(-30, 30) / 100.0));
+        $facingAngle = $this->normalizeAngle($facingAngle);
 
         $color = $player['color'] ?? $colorKeys[array_rand($colorKeys)];
 
@@ -129,22 +187,26 @@ class SnakeSimulationService
             ];
         }
 
+        $spawnProtectionTicks = (int)ceil((float)config('game.spawn_protection_seconds', 2.5) * 10);
+
         return [
-            'id'            => $player['id'],
-            'nickname'      => $player['nickname'],
-            'color'         => $color,
-            'x'             => round($spawnX, 1),
-            'y'             => round($spawnY, 1),
-            'angle'         => round($facingAngle, 3),
-            'target_angle'  => round($facingAngle, 3),
-            'speed'         => self::BASE_SPEED,
-            'is_boosting'   => false,
-            'is_alive'      => true,
-            'length'        => self::MIN_STARTING_LENGTH,
-            'score'         => 0,
-            'body'          => $body,
-            'rank'          => null,
-            'eliminated_at' => null,
+            'id'                      => $player['id'],
+            'nickname'                => $player['nickname'],
+            'color'                   => $color,
+            'x'                       => round($spawnX, 1),
+            'y'                       => round($spawnY, 1),
+            'angle'                   => round($facingAngle, 3),
+            'target_angle'            => round($facingAngle, 3),
+            'speed'                   => self::BASE_SPEED,
+            'is_boosting'             => false,
+            'is_alive'                => true,
+            'length'                  => self::MIN_STARTING_LENGTH,
+            'score'                   => 0,
+            'body'                    => $body,
+            'rank'                    => null,
+            'eliminated_at'           => null,
+            'invulnerable_until_tick' => $currentTick + $spawnProtectionTicks,
+            'last_active_tick'        => $currentTick,
         ];
     }
 
@@ -181,15 +243,24 @@ class SnakeSimulationService
         $snakes = &$state['snakes'];
 
         // Auto-revive eliminated snakes in global public rooms after 3 seconds (30 ticks)
+        // Also prune disconnected ghost snakes (inactivity > 15s or left voluntarily)
         if (!empty($state['is_public'])) {
             foreach ($snakes as $id => &$snake) {
-                if (!$snake['is_alive'] && empty($snake['left_voluntarily']) && isset($snake['respawn_tick'])) {
-                    if ($state['tick'] >= $snake['respawn_tick']) {
+                $hasRecentInput = isset($inputs[$id]) || (($state['tick'] - ($snake['last_active_tick'] ?? 0)) < 150);
+
+                // Remove ghost snakes from disconnected players or test runs
+                if (!empty($snake['left_voluntarily']) || !$hasRecentInput) {
+                    unset($snakes[$id]);
+                    continue;
+                }
+
+                if (!$snake['is_alive']) {
+                    if (isset($snake['respawn_tick']) && $state['tick'] >= $snake['respawn_tick']) {
                         $freshSnake = $this->createSnakeForPlayer($width, $height, [
                             'id'       => $id,
                             'nickname' => $snake['nickname'],
                             'color'    => $snake['color'],
-                        ], $snakes);
+                        ], $snakes, $state['tick']);
                         $snake = $freshSnake;
                     }
                 }
@@ -204,6 +275,7 @@ class SnakeSimulationService
             }
 
             if (isset($inputs[$id])) {
+                $snake['last_active_tick'] = $state['tick'];
                 $input = $inputs[$id];
                 if (isset($input['angle']) && is_numeric($input['angle'])) {
                     $snake['target_angle'] = $this->normalizeAngle((float)$input['angle']);
@@ -297,6 +369,9 @@ class SnakeSimulationService
                 continue;
             }
 
+            // Spawn invulnerability check: snakes under spawn protection cannot be eliminated by collisions
+            $isInvulnerable = ($snake['invulnerable_until_tick'] ?? 0) > $state['tick'];
+
             $head = $newHeads[$id];
 
             // A. Wall collisions
@@ -306,7 +381,14 @@ class SnakeSimulationService
                 $head['y'] < self::HEAD_RADIUS ||
                 $head['y'] > ($height - self::HEAD_RADIUS)
             ) {
-                $eliminatedThisTick[$id] = 'wall';
+                if (!$isInvulnerable) {
+                    $eliminatedThisTick[$id] = 'wall';
+                }
+                continue;
+            }
+
+            // Invulnerable snakes cannot be eliminated by collisions with other snakes
+            if ($isInvulnerable) {
                 continue;
             }
 
@@ -315,6 +397,12 @@ class SnakeSimulationService
             // C. Head-on collision and body collision against other snakes
             foreach ($snakes as $otherId => $otherSnake) {
                 if ($otherId === $id || !$otherSnake['is_alive']) {
+                    continue;
+                }
+
+                // If other snake is currently under spawn protection, neither snake is eliminated
+                $otherIsInvulnerable = ($otherSnake['invulnerable_until_tick'] ?? 0) > $state['tick'];
+                if ($otherIsInvulnerable) {
                     continue;
                 }
 
@@ -409,6 +497,13 @@ class SnakeSimulationService
         $remainingFoods = [];
         $eatenFoodIds = [];
 
+        if (!isset($state['pending_food_respawns']) || !is_array($state['pending_food_respawns'])) {
+            $state['pending_food_respawns'] = [];
+        }
+
+        $respawnDelaySec = (int)config('game.food_respawn_delay_seconds', 40);
+        $delayTicks = $respawnDelaySec * 10;
+
         foreach ($state['foods'] as $food) {
             $eaten = false;
             foreach ($snakes as $id => &$snake) {
@@ -426,6 +521,15 @@ class SnakeSimulationService
                     $snake['length'] += $this->getGrowthForScore($foodVal);
                     $eaten = true;
                     $eatenFoodIds[] = $food['id'];
+
+                    // Authoritative 40-second respawn timer for ambient food
+                    $isAmbient = !str_starts_with($food['id'], 'drop_') && !str_starts_with($food['id'], 'boost_');
+                    if ($isAmbient) {
+                        $state['pending_food_respawns'][] = [
+                            'respawn_tick' => $state['tick'] + $delayTicks,
+                            'orig_id'      => $food['id'],
+                        ];
+                    }
                     break;
                 }
             }
@@ -436,7 +540,19 @@ class SnakeSimulationService
             }
         }
 
-        // 7. Replenish food back to target count (ambient food always maintained independently of drops)
+        // 7. Authoritative 40-second food respawn logic
+        $matureCount = 0;
+        $unexpiredRespawns = [];
+        foreach ($state['pending_food_respawns'] as $item) {
+            if ($state['tick'] >= ($item['respawn_tick'] ?? 0)) {
+                $matureCount++;
+            } else {
+                $unexpiredRespawns[] = $item;
+            }
+        }
+        $state['pending_food_respawns'] = $unexpiredRespawns;
+
+        // Count current ambient food in arena
         $ambientCount = 0;
         foreach ($remainingFoods as $f) {
             if (!str_starts_with($f['id'], 'drop_') && !str_starts_with($f['id'], 'boost_')) {
@@ -445,9 +561,26 @@ class SnakeSimulationService
         }
 
         $targetAmbient = (int)($state['food_count'] ?? config('game.food_count', self::TARGET_FOOD_COUNT));
-        $neededFood = max(0, $targetAmbient - $ambientCount);
-        if ($neededFood > 0) {
-            $newBatch = $this->spawnFoodBatch($state, $neededFood);
+        $toSpawn = $matureCount;
+
+        // If total ambient + unexpired respawns is still below targetAmbient (e.g. initial launch catch-up),
+        // schedule or spawn missing items to strictly preserve configured population
+        $totalTracked = $ambientCount + count($state['pending_food_respawns']) + $toSpawn;
+        if ($totalTracked < $targetAmbient) {
+            $deficit = $targetAmbient - $totalTracked;
+            if ($ambientCount < ($targetAmbient / 2)) {
+                $toSpawn += $deficit;
+            } else {
+                for ($d = 0; $d < $deficit; $d++) {
+                    $state['pending_food_respawns'][] = [
+                        'respawn_tick' => $state['tick'] + $delayTicks,
+                    ];
+                }
+            }
+        }
+
+        if ($toSpawn > 0) {
+            $newBatch = $this->spawnFoodBatch($state, $toSpawn);
             $remainingFoods = array_merge($remainingFoods, $newBatch);
         }
         $state['foods'] = array_values($remainingFoods);

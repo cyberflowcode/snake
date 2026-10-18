@@ -32,4 +32,16 @@ return [
     'food_values' => [100, 200, 500],
 
     'score_per_growth' => env('GAME_SCORE_PER_GROWTH', 100),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Food Respawn Delay & Spawn Protection
+    |--------------------------------------------------------------------------
+    | 'food_respawn_delay_seconds' defines authoritative delay before replacement
+    | food orbs spawn into the arena after being eaten (default 40s).
+    | 'spawn_protection_seconds' grants invulnerability to newly spawned snakes (default 2.5s).
+    */
+    'food_respawn_delay_seconds' => env('GAME_FOOD_RESPAWN_DELAY_SECONDS', 40),
+
+    'spawn_protection_seconds' => env('GAME_SPAWN_PROTECTION_SECONDS', 2.5),
 ];

@@ -471,6 +471,20 @@
             ctx.restore();
         }
 
+        // Spawn protection / invulnerability aura
+        if (auth.invulnerable_until_tick && auth.invulnerable_until_tick > (authState?.tick || 0)) {
+            const pulse = (Math.sin(performance.now() * 0.01) * 0.25) + 0.75;
+            ctx.save();
+            ctx.strokeStyle = `rgba(0, 229, 255, ${0.6 * pulse})`;
+            ctx.lineWidth = 2.5;
+            ctx.shadowBlur = 12;
+            ctx.shadowColor = '#00e5ff';
+            ctx.beginPath();
+            ctx.arc(hx, hy, HEAD_R + 6, 0, Math.PI * 2);
+            ctx.stroke();
+            ctx.restore();
+        }
+
         // Eyes
         const ED = 8.5, EF = 5, ER = 5.5, PR = 3;
         const lx = hx + Math.cos(ha) * EF + Math.cos(ha - Math.PI / 2) * ED;
