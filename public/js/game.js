@@ -32,6 +32,9 @@
     let localScore  = 0;
     let localLength = 14;
 
+    // Track last processed state tick to prevent HTTP/WebSocket race conditions
+    let lastProcessedTick = -1;
+
     // DOM element cache
     const el = {};
 
@@ -482,6 +485,7 @@
         myPlayer    = null;
         localScore  = 0;
         localLength = 14;
+        lastProcessedTick = -1;
         SnakeEngine.setMyPlayer(null);
         SnakeEngine.setAuthState(null);
 
@@ -710,11 +714,21 @@
         el.gameOverModal.style.display = 'none';
         localScore  = 0;
         localLength = 14;
+        lastProcessedTick = -1;
         _onState(state);
     }
 
     function _onState(state) {
         if (!state || !state.status) return;
+
+        // Discard stale out-of-order packets (e.g. slow HTTP responses arriving after a newer WebSocket tick)
+        if (typeof state.tick === 'number') {
+            if (state.tick < lastProcessedTick) {
+                return;
+            }
+            lastProcessedTick = state.tick;
+        }
+
         SnakeEngine.setAuthState(state);
 
         // Countdown overlay
@@ -798,8 +812,9 @@
         // Collect any food eaten optimistically
         const eats = SnakeEngine.pollLocalEats();
         eats.forEach(f => {
-            localScore  += f.value || 1;
-            localLength += 1;
+            const val = f.value || 100;
+            localScore  += val;
+            localLength += Math.max(1, Math.round(val / 100));
         });
 
         if (el.hudScore)  el.hudScore.innerText  = localScore.toLocaleString();

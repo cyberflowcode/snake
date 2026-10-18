@@ -17,4 +17,19 @@ return [
     'food_count' => env('GAME_FOOD_COUNT', 120),
 
     'room_expire_minutes' => env('GAME_ROOM_EXPIRE_MINUTES', 60),
+
+    /*
+    |--------------------------------------------------------------------------
+    | Random Food Values & Snake Growth Configuration
+    |--------------------------------------------------------------------------
+    | Food items spawn with random authoritative point values (100, 200, 500).
+    | 'score_per_growth' determines the ratio of points to body length growth.
+    | Ratio 100:
+    |   100-pt food => +1 segment length
+    |   200-pt food => +2 segment length
+    |   500-pt food => +5 segment length
+    */
+    'food_values' => [100, 200, 500],
+
+    'score_per_growth' => env('GAME_SCORE_PER_GROWTH', 100),
 ];

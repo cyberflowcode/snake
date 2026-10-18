@@ -198,10 +198,30 @@
                         s.y += errY * k;
                     }
                 } else {
-                    // Remote — lerp towards authoritative position
-                    const k = Math.min(1.0, 10.0 * dt);
-                    s.x += (a.x - s.x) * k;
-                    s.y += (a.y - s.y) * k;
+                    // Remote snake continuous dead-reckoning + interpolation:
+                    // 1. Advance position along current heading so remote snakes never freeze between 10Hz ticks
+                    s.x += Math.cos(s.angle) * dist;
+                    s.y += Math.sin(s.angle) * dist;
+
+                    // 2. Smoothly reconcile toward authoritative server position
+                    const errX = a.x - s.x;
+                    const errY = a.y - s.y;
+                    const errDist = Math.hypot(errX, errY);
+
+                    if (errDist > 250) {
+                        // Snap if large jump (respawn or teleport)
+                        s.x = a.x;
+                        s.y = a.y;
+                        s.angle = a.angle;
+                        if (a.body && Array.isArray(a.body)) {
+                            s.body = a.body.map(seg => ({ x: seg.x, y: seg.y }));
+                        }
+                    } else {
+                        // Smooth exponential convergence
+                        const blendK = Math.min(1.0, 9.0 * dt);
+                        s.x += errX * blendK;
+                        s.y += errY * blendK;
+                    }
                 }
             } else if (isCountdown) {
                 // During countdown snakes are stationary — snap to server pos
@@ -231,6 +251,17 @@
                 if (d > 0.0001) {
                     follower.x = leader.x + (dx / d) * SEG_DIST;
                     follower.y = leader.y + (dy / d) * SEG_DIST;
+                }
+
+                // Remote body segment soft guidance towards authoritative server body
+                if (!isMe && a.body && a.body[i + 1]) {
+                    const sSeg = a.body[i + 1];
+                    const sx = sSeg.x - follower.x;
+                    const sy = sSeg.y - follower.y;
+                    if (Math.hypot(sx, sy) < 120) {
+                        follower.x += sx * Math.min(0.2, 5.0 * dt);
+                        follower.y += sy * Math.min(0.2, 5.0 * dt);
+                    }
                 }
             }
         }
@@ -347,8 +378,24 @@
         for (let i = 0; i < foods.length; i++) {
             const f = foods[i];
             if (f.x < vL || f.x > vR || f.y < vT || f.y > vB) continue;
-            const spr = foodSprites[f.color] || foodSprites['#ffd600'];
-            if (spr) ctx.drawImage(spr, f.x - 16, f.y - 16);
+            const val = f.value || 100;
+            const key = `${f.color}_${val}`;
+            const spr = foodSprites[key] || foodSprites[`${f.color}_100`] || foodSprites['#ffd600_100'];
+            const half = val >= 500 ? 32 : (val >= 200 ? 24 : 16);
+            if (spr) ctx.drawImage(spr, f.x - half, f.y - half);
+
+            // Floating value badge for higher-value food (200 & 500)
+            if (val >= 200) {
+                ctx.save();
+                ctx.font = val >= 500 ? '900 11px Outfit,sans-serif' : '800 9px Outfit,sans-serif';
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                ctx.fillStyle = val >= 500 ? '#ffd600' : '#ffffff';
+                ctx.shadowColor = 'rgba(0,0,0,0.85)';
+                ctx.shadowBlur = 4;
+                ctx.fillText(String(val), f.x, f.y);
+                ctx.restore();
+            }
         }
 
         // 4. Snakes
@@ -457,16 +504,57 @@
         }
 
         FOOD_COLORS.forEach(color => {
-            const sz = 32, c = sz / 2;
-            const cv = Object.assign(document.createElement('canvas'), { width: sz, height: sz });
-            const cx = cv.getContext('2d');
-            const halo = cx.createRadialGradient(c, c, 2, c, c, c);
-            halo.addColorStop(0, color); halo.addColorStop(0.35, color); halo.addColorStop(1, 'rgba(0,0,0,0)');
-            cx.fillStyle = halo; cx.beginPath(); cx.arc(c, c, c, 0, Math.PI * 2); cx.fill();
-            const core = cx.createRadialGradient(c - 1, c - 1, 0, c, c, 6);
-            core.addColorStop(0, '#fff'); core.addColorStop(0.6, color); core.addColorStop(1, color);
-            cx.fillStyle = core; cx.beginPath(); cx.arc(c, c, 6, 0, Math.PI * 2); cx.fill();
-            foodSprites[color] = cv;
+            [100, 200, 500].forEach(val => {
+                let sz, r, glowR;
+                if (val >= 500) {
+                    sz = 64; r = 13; glowR = 30;
+                } else if (val >= 200) {
+                    sz = 48; r = 10; glowR = 22;
+                } else {
+                    sz = 32; r = 6; glowR = 15;
+                }
+                const c = sz / 2;
+                const cv = Object.assign(document.createElement('canvas'), { width: sz, height: sz });
+                const cx = cv.getContext('2d');
+
+                // Outer halo
+                const halo = cx.createRadialGradient(c, c, 2, c, c, glowR);
+                halo.addColorStop(0, color);
+                halo.addColorStop(val >= 500 ? 0.45 : 0.35, color);
+                halo.addColorStop(1, 'rgba(0,0,0,0)');
+                cx.fillStyle = halo;
+                cx.beginPath();
+                cx.arc(c, c, glowR, 0, Math.PI * 2);
+                cx.fill();
+
+                // Inner core
+                const core = cx.createRadialGradient(c - 1, c - 1, 0, c, c, r);
+                core.addColorStop(0, '#ffffff');
+                core.addColorStop(0.55, color);
+                core.addColorStop(1, color);
+                cx.fillStyle = core;
+                cx.beginPath();
+                cx.arc(c, c, r, 0, Math.PI * 2);
+                cx.fill();
+
+                if (val >= 500) {
+                    // Golden outer border ring for 500-pt food
+                    cx.strokeStyle = '#ffd600';
+                    cx.lineWidth = 1.5;
+                    cx.beginPath();
+                    cx.arc(c, c, r + 2.5, 0, Math.PI * 2);
+                    cx.stroke();
+                } else if (val >= 200) {
+                    // White border ring for 200-pt food
+                    cx.strokeStyle = 'rgba(255,255,255,0.7)';
+                    cx.lineWidth = 1.2;
+                    cx.beginPath();
+                    cx.arc(c, c, r + 1.5, 0, Math.PI * 2);
+                    cx.stroke();
+                }
+
+                foodSprites[`${color}_${val}`] = cv;
+            });
         });
     }
 

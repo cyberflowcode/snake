@@ -229,7 +229,7 @@ class SnakeSimulationService
                             'id'    => 'boost_' . $state['tick'] . '_' . $id,
                             'x'     => $tail['x'],
                             'y'     => $tail['y'],
-                            'value' => 1,
+                            'value' => 100,
                             'color' => '#ffffff',
                         ];
                     }
@@ -388,11 +388,12 @@ class SnakeSimulationService
             $dropInterval = max(1, (int)ceil(count($snake['body']) / 18));
             foreach ($snake['body'] as $k => $seg) {
                 if ($k % $dropInterval === 0) {
+                    $dropVal = $this->getRandomFoodValue();
                     $state['foods'][] = [
                         'id'    => 'drop_' . $state['tick'] . '_' . $id . '_' . $k,
                         'x'     => $seg['x'],
                         'y'     => $seg['y'],
-                        'value' => 4,
+                        'value' => $dropVal,
                         'color' => self::PALETTE[$snake['color']] ?? '#ffeb3b',
                     ];
                 }
@@ -417,8 +418,9 @@ class SnakeSimulationService
                 $distSq = $dx * $dx + $dy * $dy;
 
                 if ($distSq < (self::HEAD_RADIUS + self::FOOD_RADIUS + 4.0) ** 2) {
-                    $snake['score'] += $food['value'];
-                    $snake['length'] += 1;
+                    $foodVal = (int)($food['value'] ?? 100);
+                    $snake['score'] += $foodVal;
+                    $snake['length'] += $this->getGrowthForScore($foodVal);
                     $eaten = true;
                     $eatenFoodIds[] = $food['id'];
                     break;
@@ -529,11 +531,12 @@ class SnakeSimulationService
                 $attempts++;
             } while (!$isSafe && $attempts < 15);
 
+            $foodVal = $this->getRandomFoodValue();
             $foods[] = [
                 'id'    => 'food_' . ($state['tick'] ?? 0) . '_' . uniqid(),
                 'x'     => $safeX,
                 'y'     => $safeY,
-                'value' => 2,
+                'value' => $foodVal,
                 'color' => $paletteColors[array_rand($paletteColors)],
             ];
         }
@@ -562,5 +565,30 @@ class SnakeSimulationService
     {
         $diff = $target - $current;
         return $this->normalizeAngle($diff);
+    }
+
+    /**
+     * Get a random authoritative food score value (100, 200, or 500).
+     */
+    public function getRandomFoodValue(): int
+    {
+        $values = config('game.food_values', [100, 200, 500]);
+        if (!is_array($values) || empty($values)) {
+            $values = [100, 200, 500];
+        }
+        return (int)$values[array_rand($values)];
+    }
+
+    /**
+     * Calculate body growth segments for a given food point value.
+     * Configurable via config('game.score_per_growth', 100).
+     */
+    public function getGrowthForScore(int $value): int
+    {
+        $ratio = (int)config('game.score_per_growth', 100);
+        if ($ratio <= 0) {
+            $ratio = 100;
+        }
+        return max(1, (int)round($value / $ratio));
     }
 }
