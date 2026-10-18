@@ -152,17 +152,21 @@ class GameRoomController extends Controller
         }
 
         $validated = $request->validate([
-            'angle' => ['required', 'numeric'],
-            'boost' => ['nullable', 'boolean'],
+            'angle'         => ['required', 'numeric'],
+            'boost'         => ['nullable', 'boolean'],
+            'eaten_foods'   => ['nullable', 'array'],
+            'eaten_foods.*' => ['string'],
         ]);
 
         $angle = (float)$validated['angle'];
         $boost = (bool)($validated['boost'] ?? false);
+        $eatenFoods = $validated['eaten_foods'] ?? [];
 
         // Store into fast cache buffer for the game tick loop
         Cache::put("snake_input_{$player->room_id}_{$player->id}", [
-            'angle' => $angle,
-            'boost' => $boost,
+            'angle'       => $angle,
+            'boost'       => $boost,
+            'eaten_foods' => $eatenFoods,
         ], 10);
 
         // Keep player activity timestamp fresh every 5s without overloading DB

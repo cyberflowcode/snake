@@ -78,13 +78,13 @@
     function setAuthState(state) {
         if (!state || Array.isArray(state) || !state.status) return;
 
-        // Prune optimistic eaten food timestamps older than 1.5 seconds
+        // Prune optimistic eaten food timestamps older than 45 seconds (ambient food respawn is 40s)
         const now = Date.now();
         for (const [id, t] of localEatenMap.entries()) {
-            if (now - t > 1500) localEatenMap.delete(id);
+            if (now - t > 45000) localEatenMap.delete(id);
         }
 
-        // Filter out foods that the local player already ate optimistically so they do not flash back before server roundtrip
+        // Filter out foods that were eaten so they NEVER flash back before or after server roundtrip
         if (state.foods && Array.isArray(state.foods) && localEatenMap.size > 0) {
             state.foods = state.foods.filter(f => !localEatenMap.has(f.id));
         }
@@ -106,6 +106,9 @@
     function getCamera() { return camera; }
     function getAuthState() { return authState; }
 
+    let _pendingEats = [];
+    let _newlyEatenIds = [];
+
     /** Returns list of food items that were "eaten" locally this frame — for optimistic HUD update */
     function pollLocalEats() {
         const eats = _pendingEats;
@@ -113,7 +116,27 @@
         return eats;
     }
 
-    let _pendingEats = [];
+    /** Returns list of food IDs eaten locally since last network tick — for authoritative server validation */
+    function pollNewlyEatenIds() {
+        const ids = _newlyEatenIds;
+        _newlyEatenIds = [];
+        return ids;
+    }
+
+    /** Distance from point to line segment squared */
+    function _distToSegmentSq(px, py, x1, y1, x2, y2) {
+        const dx = x2 - x1;
+        const dy = y2 - y1;
+        const l2 = dx * dx + dy * dy;
+        if (l2 <= 0.0001) {
+            return (px - x1) ** 2 + (py - y1) ** 2;
+        }
+        let t = ((px - x1) * dx + (py - y1) * dy) / l2;
+        t = Math.max(0, Math.min(1, t));
+        const projX = x1 + t * dx;
+        const projY = y1 + t * dy;
+        return (px - projX) ** 2 + (py - projY) ** 2;
+    }
 
     // -----------------------------------------------------------------------
     // Main render loop
@@ -174,6 +197,9 @@
             const s   = localSnakes[id];
             const a   = authState.snakes[id];
             if (!a || !a.is_alive) { delete localSnakes[id]; continue; }
+
+            s.prevX = s.x;
+            s.prevY = s.y;
 
             const isMe = (myPlayerId !== null && Number(id) === myPlayerId);
 
@@ -290,17 +316,46 @@
         }
 
         // ---- Optimistic food eating ----
-        if (isLive && myPlayerId !== null && localSnakes[myPlayerId] && authState.foods) {
-            const me    = localSnakes[myPlayerId];
+        if (isLive && authState.foods && Array.isArray(authState.foods)) {
             const foods = authState.foods;
             const now   = Date.now();
-            for (let i = foods.length - 1; i >= 0; i--) {
-                const f  = foods[i];
-                const dx = me.x - f.x;
-                const dy = me.y - f.y;
-                if (dx * dx + dy * dy < EAT_R_SQ) {
-                    localEatenMap.set(f.id, now);
-                    _pendingEats.push(foods.splice(i, 1)[0]);
+
+            for (const id in localSnakes) {
+                const s = localSnakes[id];
+                if (!s) continue;
+                const isMe = (myPlayerId !== null && Number(id) === myPlayerId);
+
+                for (let i = foods.length - 1; i >= 0; i--) {
+                    const f = foods[i];
+                    if (!f) continue;
+                    if (localEatenMap.has(f.id)) {
+                        foods.splice(i, 1);
+                        continue;
+                    }
+
+                    const val = f.value || 100;
+                    // Generous eat radius matching visual sizes + magnet
+                    const fRadius = val >= 500 ? 28 : (val >= 200 ? 20 : 14);
+                    const eatDist = HEAD_R + fRadius + 14; // slither magnet radius
+                    const eatDistSq = eatDist * eatDist;
+
+                    const dx = s.x - f.x;
+                    const dy = s.y - f.y;
+                    let eaten = (dx * dx + dy * dy < eatDistSq);
+
+                    // Swept line check from previous position to new position
+                    if (!eaten && s.prevX !== undefined && s.prevY !== undefined) {
+                        eaten = _distToSegmentSq(f.x, f.y, s.prevX, s.prevY, s.x, s.y) < eatDistSq;
+                    }
+
+                    if (eaten) {
+                        localEatenMap.set(f.id, now);
+                        const eatenFood = foods.splice(i, 1)[0];
+                        if (isMe && eatenFood) {
+                            _pendingEats.push(eatenFood);
+                            _newlyEatenIds.push(f.id);
+                        }
+                    }
                 }
             }
         }
@@ -394,6 +449,7 @@
         const foods = authState.foods || [];
         for (let i = 0; i < foods.length; i++) {
             const f = foods[i];
+            if (localEatenMap.has(f.id)) continue;
             if (f.x < vL || f.x > vR || f.y < vT || f.y > vB) continue;
             const val = f.value || 100;
             const key = `${f.color}_${val}`;
@@ -700,6 +756,7 @@
         getCamera,
         getAuthState,
         pollLocalEats,
+        pollNewlyEatenIds,
         rebuildPattern,
     };
 

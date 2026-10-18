@@ -353,10 +353,15 @@
 
         try {
             if (isActive) {
-                const res = await _api(`/api/rooms/${currentRoom.code}/direction`, 'POST', {
+                const eatenFoodIds = SnakeEngine.pollNewlyEatenIds ? SnakeEngine.pollNewlyEatenIds() : [];
+                const payload = {
                     angle: targetAngle,
                     boost: isBoosting,
-                }, 1500);
+                };
+                if (eatenFoodIds && eatenFoodIds.length > 0) {
+                    payload.eaten_foods = eatenFoodIds;
+                }
+                const res = await _api(`/api/rooms/${currentRoom.code}/direction`, 'POST', payload, 1500);
                 if (res?.state) _onState(res.state);
             } else if (currentRoom) {
                 const res = await _api(`/api/rooms/${currentRoom.code}/snapshot`, 'GET', null, 1500);

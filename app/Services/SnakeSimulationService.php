@@ -292,7 +292,7 @@ class SnakeSimulationService
             }
 
             // Smooth turning: clamp angular delta to MAX_TURN_PER_TICK (prevents 180° reversal into neck)
-            $diff = $this->angleDiff($snake['target_angle'], $snake['angle']);
+            $diff = $this->angleDiff($snake['target_angle'] ?? $snake['angle'], $snake['angle']);
             if (abs($diff) > self::MAX_TURN_PER_TICK) {
                 $diff = ($diff > 0 ? 1 : -1) * self::MAX_TURN_PER_TICK;
             }
@@ -331,6 +331,9 @@ class SnakeSimulationService
             if (!$snake['is_alive']) {
                 continue;
             }
+
+            $snake['prev_x'] = $snake['x'];
+            $snake['prev_y'] = $snake['y'];
 
             $newX = $snake['x'] + cos($snake['angle']) * $snake['speed'];
             $newY = $snake['y'] + sin($snake['angle']) * $snake['speed'];
@@ -520,37 +523,84 @@ class SnakeSimulationService
         $respawnDelaySec = (int)config('game.food_respawn_delay_seconds', 40);
         $delayTicks = $respawnDelaySec * 10;
 
-        foreach ($state['foods'] as $food) {
-            $eaten = false;
-            foreach ($snakes as $id => &$snake) {
-                if (!$snake['is_alive']) {
-                    continue;
-                }
-
-                $dx = $snake['x'] - $food['x'];
-                $dy = $snake['y'] - $food['y'];
-                $distSq = $dx * $dx + $dy * $dy;
-
-                if ($distSq < (self::HEAD_RADIUS + self::FOOD_RADIUS + 4.0) ** 2) {
-                    $foodVal = (int)($food['value'] ?? 100);
-                    $snake['score'] += $foodVal;
-                    $snake['best_score'] = max((int)($snake['best_score'] ?? 0), (int)$snake['score']);
-                    $snake['length'] += $this->getGrowthForScore($foodVal);
-                    $eaten = true;
-                    $eatenFoodIds[] = $food['id'];
-
-                    // Authoritative 40-second respawn timer for ambient food
-                    $isAmbient = !str_starts_with($food['id'], 'drop_') && !str_starts_with($food['id'], 'boost_');
-                    if ($isAmbient) {
-                        $state['pending_food_respawns'][] = [
-                            'respawn_tick' => $state['tick'] + $delayTicks,
-                            'orig_id'      => $food['id'],
-                        ];
-                    }
-                    break;
+        // Collect client-reported eaten food IDs from inputs
+        $clientReportedEats = [];
+        foreach ($inputs as $id => $inp) {
+            if (!empty($inp['eaten_foods']) && is_array($inp['eaten_foods']) && isset($snakes[$id]) && $snakes[$id]['is_alive']) {
+                foreach ($inp['eaten_foods'] as $fId) {
+                    $clientReportedEats[$fId] = $id;
                 }
             }
-            unset($snake);
+        }
+
+        foreach ($state['foods'] as $food) {
+            $eaten = false;
+            $foodVal = (int)($food['value'] ?? 100);
+
+            // Check if client reported eating this food (with 150px proximity sanity check)
+            if (isset($clientReportedEats[$food['id']])) {
+                $eaterId = $clientReportedEats[$food['id']];
+                if (isset($snakes[$eaterId]) && $snakes[$eaterId]['is_alive']) {
+                    $s = &$snakes[$eaterId];
+                    $distSq = ($s['x'] - $food['x']) ** 2 + ($s['y'] - $food['y']) ** 2;
+                    if ($distSq <= (150.0 ** 2)) {
+                        $s['score'] += $foodVal;
+                        $s['best_score'] = max((int)($s['best_score'] ?? 0), (int)$s['score']);
+                        $s['length'] += $this->getGrowthForScore($foodVal);
+                        $eaten = true;
+                        $eatenFoodIds[] = $food['id'];
+
+                        $isAmbient = !str_starts_with($food['id'], 'drop_') && !str_starts_with($food['id'], 'boost_');
+                        if ($isAmbient) {
+                            $state['pending_food_respawns'][] = [
+                                'respawn_tick' => $state['tick'] + $delayTicks,
+                                'orig_id'      => $food['id'],
+                            ];
+                        }
+                    }
+                    unset($s);
+                }
+            }
+
+            if (!$eaten) {
+                // Authoritative simulation collision check with visual radius and swept movement
+                $fRadius = ($foodVal >= 500) ? 28.0 : (($foodVal >= 200) ? 20.0 : 14.0);
+                $eatRadius = self::HEAD_RADIUS + $fRadius + 14.0;
+                $eatRadiusSq = $eatRadius * $eatRadius;
+
+                foreach ($snakes as $id => &$snake) {
+                    if (!$snake['is_alive']) {
+                        continue;
+                    }
+
+                    $dx = $snake['x'] - $food['x'];
+                    $dy = $snake['y'] - $food['y'];
+                    $distSq = $dx * $dx + $dy * $dy;
+
+                    if ($distSq >= $eatRadiusSq && isset($snake['prev_x'], $snake['prev_y'])) {
+                        $distSq = $this->distToSegmentSq($food['x'], $food['y'], (float)$snake['prev_x'], (float)$snake['prev_y'], (float)$snake['x'], (float)$snake['y']);
+                    }
+
+                    if ($distSq < $eatRadiusSq) {
+                        $snake['score'] += $foodVal;
+                        $snake['best_score'] = max((int)($snake['best_score'] ?? 0), (int)$snake['score']);
+                        $snake['length'] += $this->getGrowthForScore($foodVal);
+                        $eaten = true;
+                        $eatenFoodIds[] = $food['id'];
+
+                        // Authoritative 40-second respawn timer for ambient food
+                        $isAmbient = !str_starts_with($food['id'], 'drop_') && !str_starts_with($food['id'], 'boost_');
+                        if ($isAmbient) {
+                            $state['pending_food_respawns'][] = [
+                                'respawn_tick' => $state['tick'] + $delayTicks,
+                                'orig_id'      => $food['id'],
+                            ];
+                        }
+                        break;
+                    }
+                }
+                unset($snake);
+            }
 
             if (!$eaten) {
                 $remainingFoods[] = $food;
@@ -751,5 +801,22 @@ class SnakeSimulationService
             $ratio = 100;
         }
         return max(1, (int)round($value / $ratio));
+    }
+
+    /**
+     * Distance squared from a point to a 2D line segment.
+     */
+    private function distToSegmentSq(float $px, float $py, float $x1, float $y1, float $x2, float $y2): float
+    {
+        $dx = $x2 - $x1;
+        $dy = $y2 - $y1;
+        $l2 = $dx * $dx + $dy * $dy;
+        if ($l2 <= 0.0001) {
+            return ($px - $x1) ** 2 + ($py - $y1) ** 2;
+        }
+        $t = max(0.0, min(1.0, (($px - $x1) * $dx + ($py - $y1) * $dy) / $l2));
+        $projX = $x1 + $t * $dx;
+        $projY = $y1 + $t * $dy;
+        return ($px - $projX) ** 2 + ($py - $projY) ** 2;
     }
 }
