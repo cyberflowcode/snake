@@ -28,6 +28,10 @@
     let lastSentBoost = false;
     let lastSendTime  = 0;
 
+    // Live network ping (round-trip of /direction & /snapshot calls), averaged over last 8 samples
+    let pingSamples = [];
+    let currentPing = 0;
+
     // Score tracking (optimistic)
     let localScore      = 0;
     let localBestScore  = 0;
@@ -106,6 +110,13 @@
         el.lobbyPlayers    = document.getElementById('lobby-players-list');
         el.lobbyCode       = document.getElementById('lobby-room-code');
         el.toasts          = document.getElementById('toast-container');
+
+        // Performance HUD (live FPS / ping / player count)
+        el.perfHud       = document.getElementById('perf-hud');
+        el.perfFps       = document.getElementById('perf-fps');
+        el.perfPing      = document.getElementById('perf-ping');
+        el.perfPlayers   = document.getElementById('perf-players');
+        el.perfFrameMs   = document.getElementById('perf-framems');
     }
 
     function _setupCanvas() {
@@ -334,6 +345,16 @@
     // Tracks last lobby poll timestamp separately from game tick
     let lastLobbyPoll = 0;
 
+    /** Record a network round-trip sample and keep a rolling 8-sample average. */
+    function _recordPing(rtt) {
+        if (!rtt || rtt <= 0 || rtt > 5000) return; // ignore timeouts / absurd values
+        pingSamples.push(rtt);
+        if (pingSamples.length > 8) pingSamples.shift();
+        let sum = 0;
+        for (let i = 0; i < pingSamples.length; i++) sum += pingSamples[i];
+        currentPing = Math.round(sum / pingSamples.length);
+    }
+
     async function _networkTick() {
         if (!currentRoom || syncPending) return;
 
@@ -351,6 +372,7 @@
         lastSentBoost  = isBoosting;
         lastSendTime   = now;
 
+        const sendT = performance.now();
         try {
             if (isActive) {
                 const eatenFoodIds = SnakeEngine.pollNewlyEatenIds ? SnakeEngine.pollNewlyEatenIds() : [];
@@ -362,9 +384,11 @@
                     payload.eaten_foods = eatenFoodIds;
                 }
                 const res = await _api(`/api/rooms/${currentRoom.code}/direction`, 'POST', payload, 1500);
+                _recordPing(performance.now() - sendT);
                 if (res?.state) _onState(res.state);
             } else if (currentRoom) {
                 const res = await _api(`/api/rooms/${currentRoom.code}/snapshot`, 'GET', null, 1500);
+                _recordPing(performance.now() - sendT);
                 if (res?.state) _onState(res.state);
 
                 // Update lobby player list from authoritative room data every 1.5s
@@ -893,6 +917,8 @@
         if (el.hudScore)  el.hudScore.innerText  = localScore.toLocaleString();
         if (el.hudLength) el.hudLength.innerText = localLength;
 
+        _updatePerfHUD();
+
         if (!state || !state.snakes || !myPlayer) return;
 
         const me = state.snakes[myPlayer.id];
@@ -924,6 +950,55 @@
         }
 
         _updateLeaderboard(state.snakes);
+    }
+
+    /**
+     * Update the live performance HUD widget.
+     * Colours:
+     *  FPS   — green ≥50, yellow 30–49, red <30
+     *  Ping  — green <80ms, yellow 80–150ms, red >150ms
+     */
+    function _updatePerfHUD() {
+        if (!el.perfHud) return;
+
+        const stats = SnakeEngine.getStats ? SnakeEngine.getStats() : { fps: 0, frameMs: 0, playerCount: 0 };
+
+        const fps = stats.fps;
+        const ping = currentPing;
+        const players = stats.playerCount;
+        const frameMs = stats.frameMs;
+
+        // Show the perf HUD only while in a game (hide on modal/welcome screens)
+        const inGame = Boolean(currentRoom);
+        el.perfHud.style.display = inGame ? 'block' : 'none';
+        if (!inGame) return;
+
+        // FPS value + colour
+        if (el.perfFps) {
+            el.perfFps.textContent = fps > 0 ? fps : '—';
+            el.perfFps.style.color = fps >= 50 ? '#00e676' : fps >= 30 ? '#ffd600' : '#ff1744';
+        }
+
+        // Frame-time
+        if (el.perfFrameMs) {
+            el.perfFrameMs.textContent = frameMs > 0 ? frameMs.toFixed(1) : '—';
+        }
+
+        // Ping + colour
+        if (el.perfPing) {
+            if (ping > 0) {
+                el.perfPing.textContent = ping;
+                el.perfPing.style.color = ping < 80 ? '#00e676' : ping < 150 ? '#ffd600' : '#ff1744';
+            } else {
+                el.perfPing.textContent = '—';
+                el.perfPing.style.color = '#8b9bb4';
+            }
+        }
+
+        // Player count
+        if (el.perfPlayers) {
+            el.perfPlayers.textContent = players > 0 ? players : '—';
+        }
     }
 
     function _rankOf(id, snakes) {

@@ -50,6 +50,28 @@
             <div class="stat-line">Score: <span class="stat-val" id="hud-score">0</span></div>
         </div>
 
+        <!-- Performance HUD: live FPS, network ping (ms), frame-time, and player count -->
+        <div class="hud-perf" id="perf-hud" style="display:none;">
+            <div class="perf-cell">
+                <span class="perf-label">FPS</span>
+                <span class="perf-val" id="perf-fps">—</span>
+            </div>
+            <div class="perf-cell">
+                <span class="perf-label">FT</span>
+                <span class="perf-val perf-val-sm" id="perf-framems">—</span>
+                <span class="perf-unit">ms</span>
+            </div>
+            <div class="perf-cell">
+                <span class="perf-label">PING</span>
+                <span class="perf-val" id="perf-ping">—</span>
+                <span class="perf-unit">ms</span>
+            </div>
+            <div class="perf-cell">
+                <span class="perf-label">PLAYERS</span>
+                <span class="perf-val" id="perf-players">—</span>
+            </div>
+        </div>
+
         <!-- Bottom-Right Radar Minimap -->
         <div class="hud-minimap">
             <canvas id="minimapCanvas" width="130" height="130"></canvas>

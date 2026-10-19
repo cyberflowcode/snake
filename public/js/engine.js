@@ -58,6 +58,13 @@
     let lastTs = performance.now();
     let frame  = 0;
 
+    // Live FPS / frame-time tracking (sampled every 500ms for a smooth HUD readout)
+    let fpsFrames = 0;
+    let fpsSampleStart = performance.now();
+    let liveFps = 0;
+    let liveFrameMs = 0;
+    const frameTimeBuf = [];
+
     // -----------------------------------------------------------------------
     // Initialise engine (called once canvases are ready)
     // -----------------------------------------------------------------------
@@ -146,6 +153,23 @@
         lastTs = ts;
         const dt = Math.min(0.05, Math.max(0.001, dtMs / 1000));
         frame++;
+
+        // Sample render FPS every 500ms and keep a rolling 30-frame buffer for frame-time
+        fpsFrames++;
+        if (dtMs > 0 && dtMs < 1000) {
+            frameTimeBuf.push(dtMs);
+            if (frameTimeBuf.length > 30) frameTimeBuf.shift();
+        }
+        const nowSample = performance.now();
+        const sampleElapsed = nowSample - fpsSampleStart;
+        if (sampleElapsed >= 500) {
+            liveFps = Math.round((fpsFrames * 1000) / sampleElapsed);
+            let sum = 0;
+            for (let i = 0; i < frameTimeBuf.length; i++) sum += frameTimeBuf[i];
+            liveFrameMs = frameTimeBuf.length ? Math.round((sum / frameTimeBuf.length) * 10) / 10 : 0;
+            fpsFrames = 0;
+            fpsSampleStart = nowSample;
+        }
 
         _predict(dt);
         _draw();
@@ -746,6 +770,23 @@
     // -----------------------------------------------------------------------
     // Public API
     // -----------------------------------------------------------------------
+    /**
+     * Returns live performance stats for the on-screen HUD.
+     * @returns {{ fps: number, frameMs: number, playerCount: number }}
+     */
+    function getStats() {
+        const snakes = authState?.snakes || {};
+        let alive = 0;
+        for (const id in snakes) {
+            if (snakes[id]?.is_alive) alive++;
+        }
+        return {
+            fps:         liveFps,
+            frameMs:     liveFrameMs,
+            playerCount: alive,
+        };
+    }
+
     global.SnakeEngine = {
         COLOR_MAP,
         RANK_COLORS,
@@ -758,6 +799,7 @@
         pollLocalEats,
         pollNewlyEatenIds,
         rebuildPattern,
+        getStats,
     };
 
 })(window);

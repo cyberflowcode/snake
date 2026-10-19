@@ -784,3 +784,65 @@ html, body {
     color: var(--text-muted);
     margin-left: 8px;
 }
+
+
+/* ==========================================================================
+   Performance HUD  (FPS · Frame-time · Ping · Players)
+   Anchored below the bottom-left stat block — stays out of the minimap area.
+   ========================================================================== */
+.hud-perf {
+    position: absolute;
+    bottom: 96px;            /* sit just above the bottom-left Length/Rank/Score stats */
+    left: 24px;
+    z-index: 21;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    pointer-events: none;
+}
+
+.perf-cell {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 2px 7px 2px 5px;
+    background: rgba(10, 12, 18, 0.75);
+    border: 1px solid rgba(255, 255, 255, 0.07);
+    border-radius: 5px;
+    min-width: 102px;
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+}
+
+.perf-label {
+    font-family: var(--font-main);
+    font-size: 9px;
+    font-weight: 800;
+    letter-spacing: 0.8px;
+    text-transform: uppercase;
+    color: #4a5a70;
+    width: 44px;         /* fixed width keeps values aligned */
+    flex-shrink: 0;
+}
+
+.perf-val {
+    font-family: 'Inter', 'Outfit', monospace, sans-serif;
+    font-size: 13px;
+    font-weight: 800;
+    font-variant-numeric: tabular-nums;
+    color: #ffffff;
+    min-width: 28px;
+    text-align: right;
+}
+
+.perf-val-sm {
+    font-size: 12px;
+}
+
+.perf-unit {
+    font-size: 9px;
+    font-weight: 600;
+    color: #4a5a70;
+    letter-spacing: 0.5px;
+    text-transform: lowercase;
+}
